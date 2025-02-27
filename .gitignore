@@ -1,0 +1,6 @@
+# Fabric-generated directories
+organizations/ordererOrganizations
+organizations/peerOrganizations
+system-genesis-block/
+channel-artifacts/
+*.tar.gz
