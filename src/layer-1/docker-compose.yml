@@ -1,0 +1,105 @@
+services:
+  cometbft-node0:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cometbft-node0
+    ports:
+      - "5000:5000"
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./node0:/root/.cometbft
+      - ./templates:/app/templates
+    command: >
+      sh -c "/app/DeWS-Replica --cmt-home=/root/.cometbft --http-port 5000"
+    networks:
+      - dews-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  cometbft-node1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cometbft-node1
+    ports:
+      - "5001:5001"
+      - "9002:9002"
+      - "9003:9003"
+    volumes:
+      - ./node1:/root/.cometbft
+      - ./templates:/app/templates
+    command: >
+      sh -c "/app/DeWS-Replica --cmt-home=/root/.cometbft --http-port 5001"
+    networks:
+      - dews-network
+    depends_on:
+      cometbft-node0:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  cometbft-node2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cometbft-node2
+    ports:
+      - "5002:5002"
+      - "9004:9004"
+      - "9005:9005"
+    volumes:
+      - ./node2:/root/.cometbft
+      - ./templates:/app/templates
+    command: >
+      sh -c "/app/DeWS-Replica --cmt-home=/root/.cometbft --http-port 5002"
+    networks:
+      - dews-network
+    depends_on:
+      cometbft-node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  cometbft-node3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cometbft-node3
+    ports:
+      - "5003:5003"
+      - "9006:9006"
+      - "9007:9007"
+    volumes:
+      - ./node3:/root/.cometbft
+      - ./templates:/app/templates
+    command: >
+      sh -c "/app/DeWS-Replica --cmt-home=/root/.cometbft --http-port 5003"
+    networks:
+      - dews-network
+    depends_on:
+      cometbft-node2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5003"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  dews-network:
+    driver: bridge
