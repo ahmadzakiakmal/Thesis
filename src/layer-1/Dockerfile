@@ -1,34 +1,36 @@
-FROM golang:1.21-alpine as builder
+FROM golang:1.24-alpine AS builder
 
+# Install required packages
+RUN apk add --no-cache git bash make gcc libc-dev jq
+
+# Set working directory
 WORKDIR /app
 
-# Install dependencies
-RUN apk add --no-cache git build-base
+COPY . .
 
-# Copy Go module files
-COPY go.mod go.sum ./
-RUN go mod download
+# Build your application
+RUN go build -o ./build/bin .
 
-# Copy source code
-COPY *.go ./
-COPY templates ./templates
+# Build a smaller final image
+FROM alpine:3.17
 
-# Build the application
-RUN go build -o DeWS-Replica
-
-# Create the final image
-FROM alpine:latest
-
-WORKDIR /app
+# Install required system packages
+RUN apk add --no-cache bash curl jq
 
 # Copy the binary from the builder stage
-COPY --from=builder /app/DeWS-Replica /app/
+COPY --from=builder /app/build/bin /app/bin
 COPY --from=builder /app/templates /app/templates
 
-# Install dependencies for runtime
-RUN apk add --no-cache ca-certificates jq bash curl
+# Create directory for the node
+RUN mkdir -p /root/.cometbft
 
-# Expose ports (HTTP, P2P, RPC)
+# Environment variables with defaults
+ENV CMT_HOME=/root/.cometbft \
+    NODE_MONIKER=node \
+    HTTP_PORT=5000
+
+# Expose ports - HTTP, P2P, and RPC ports
 EXPOSE 5000-6000 9000-9100
 
-CMD ["/app/DeWS-Replica"]
+# Set entry command - adjust as needed
+CMD ["/app/bin", "--cmt-home=/root/.cometbft", "--http-port=5000"]

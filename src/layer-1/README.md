@@ -30,6 +30,13 @@ For Docker setup:
 The system now supports flexible configuration with a variable number of nodes:
 
 ```bash
+# Get dependencies and build the go binary
+go mod tidy
+go build -o ./build/bin
+
+# Build the Docker image
+docker build -t dews-image:latest .
+
 # Setup with default 4 nodes
 ./setup-network.sh
 
@@ -38,6 +45,9 @@ The system now supports flexible configuration with a variable number of nodes:
 
 # Setup with custom ports
 ./setup-network.sh -n 5 -p 8000 -r 8001 -h 4000
+
+# Use docker compose
+docker-compose up
 ```
 
 A network can tolerate up to f=(n-1)/3 Byzantine faults, where n is the number of nodes. For example:

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	nm "github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/rpc/client"
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
+	"github.com/google/uuid"
 )
 
 // DeWSWebServer handles HTTP requests using the DeWS protocol
@@ -183,6 +186,82 @@ func (server *DeWSWebServer) discoverPeers() {
 	}
 }
 
+func (server *DeWSWebServer) directBroadcastTxCommit(txData string) (map[string]interface{}, error) {
+	// Base64 encode the transaction
+	txBase64 := base64.StdEncoding.EncodeToString([]byte(txData))
+
+	// Create JSON-RPC request
+	requestBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "broadcast_tx_commit",
+		"params": map[string]interface{}{
+			"tx": txBase64, // Send as base64 encoded
+		},
+	}
+
+	requestJSON, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Log the exact request being sent
+	server.logger.Info("Sending RPC request", "body", string(requestJSON))
+
+	// Send the request
+	rpcAddr := fmt.Sprintf("http://localhost:%s", extractPortFromAddress(server.node.Config().RPC.ListenAddress))
+	resp, err := http.Post(rpcAddr, "application/json", bytes.NewReader(requestJSON))
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read and log the response
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	server.logger.Info("RPC response", "status", resp.Status, "body", string(respBody))
+
+	// Parse the response
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return result, nil
+}
+
+// Add this function to your DeWSWebServer struct
+func (server *DeWSWebServer) processAPIRequest(method, path string, data interface{}) (interface{}, error) {
+	// This is a simplified version - you'll need to expand this based on your API needs
+	switch {
+	case method == "GET" && path == "customers":
+		// Get all customers
+		// In a real implementation, this would query your database
+		return []map[string]interface{}{
+			{"id": 1, "name": "John Doe", "email": "john@example.com", "address": "123 Main St"},
+			{"id": 2, "name": "Jane Smith", "email": "jane@example.com", "address": "456 Oak Ave"},
+		}, nil
+
+	case method == "POST" && path == "customers":
+		// Create a new customer
+		// In a real implementation, this would insert into your database
+		customerData, ok := data.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid customer data format")
+		}
+
+		// Mock customer creation with a new ID
+		customerData["id"] = time.Now().Unix()
+		return customerData, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported API endpoint: %s %s", method, path)
+	}
+}
+
 // handleRoot handles the root endpoint which shows node status
 func (server *DeWSWebServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -234,7 +313,7 @@ func (server *DeWSWebServer) handleDebug(w http.ResponseWriter, r *http.Request)
 	outboundPeers, inboundPeers, dialingPeers := server.node.Switch().NumPeers()
 	debugInfo["num_peers_out"] = outboundPeers
 	debugInfo["num_peers_in"] = inboundPeers
-	debugInfo["num_peers_dialingn"] = dialingPeers
+	debugInfo["num_peers_dialing"] = dialingPeers
 	if err != nil {
 		debugInfo["tendermint_error"] = err.Error()
 	} else {
@@ -270,131 +349,112 @@ func (server *DeWSWebServer) handleDebug(w http.ResponseWriter, r *http.Request)
 
 // handleAPI handles API requests using the DeWS protocol
 func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+
+	// Check if consensus should be used
+	consensusParam := r.URL.Query().Get("consensus")
+	withConsensus := consensusParam != "0" // Default to using consensus
+
 	// Generate a unique request ID
 	requestID, err := generateRequestID()
+	fmt.Println(requestID)
 	if err != nil {
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		server.logger.Error("Failed to generate request ID", "err", err)
 		return
 	}
 
-	// Convert HTTP request to DeWS request
-	dewsRequest, err := ConvertHTTPRequestToDeWSRequest(r, requestID)
-	if err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		server.logger.Error("Failed to convert HTTP request", "err", err)
-		return
-	}
-
-	if r.Method == http.MethodGet {
-		// Execute request locally
-		dewsResponse, err := dewsRequest.GenerateResponse(server.serviceRegistry)
+	// Parse and process the request locally
+	var requestData interface{}
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			// Handle error
+			http.Error(w, "Failed to read request body", http.StatusBadRequest)
+			return
 		}
 
-		// Respond directly without blockchain
-		w.Header().Set("Content-Type", dewsResponse.Headers["Content-Type"])
-		w.WriteHeader(dewsResponse.StatusCode)
-		io.WriteString(w, dewsResponse.Body)
+		if err := json.Unmarshal(body, &requestData); err != nil {
+			http.Error(w, "Invalid JSON in request body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Extract path without the /api/ prefix
+	apiPath := strings.TrimPrefix(r.URL.Path, "/api/")
+
+	// Generate response locally (similar to what the original code does)
+	apiResponse, err := server.processAPIRequest(r.Method, apiPath, requestData)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		server.logger.Error("Failed to process API request", "err", err)
 		return
 	}
 
-	// Generate response locally
-	dewsResponse, err := dewsRequest.GenerateResponse(server.serviceRegistry)
-	if err != nil {
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
-		server.logger.Error("Failed to generate response", "err", err)
+	localProcessTime := time.Since(startTime)
+	server.logger.Info("Local processing time", "duration", localProcessTime)
+
+	// If consensus is disabled, return response immediately
+	if !withConsensus {
+		server.logger.Info("Skipping consensus", "path", r.URL.Path)
+		response := map[string]interface{}{
+			"webserviceData": apiResponse,
+			"consensusData":  nil,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
 		return
 	}
 
-	// Create transaction
-	tx := DeWSTransaction{
-		Request:      *dewsRequest,
-		Response:     *dewsResponse,
-		OriginNodeID: string(server.node.NodeInfo().ID()),
+	// Create transaction for consensus
+	tx := map[string]string{
+		"method":    r.Method,
+		"path":      apiPath,
+		"timestamp": time.Now().Format(time.RFC3339),
 	}
+	server.logger.Info("Tx Received", tx["method"], tx["path"], tx["timestamp"])
+	// TODO: use real transaction
+	simpleTx := "test_tx" + uuid.NewString()
 
-	// Submit transaction to blockchain
-	txBytes, err := tx.SerializeToBytes()
-	if err != nil {
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
-		server.logger.Error("Failed to serialize transaction", "err", err)
-		return
-	}
+	// Broadcast transaction and wait for commitment
+	consensusStart := time.Now()
+	tendermintResponse, err := server.directBroadcastTxCommit(simpleTx)
+	consensusTime := time.Since(consensusStart)
+	server.logger.Info("Consensus time", "duration", consensusTime)
 
-	// Broadcast transaction to blockchain
-	result, err := server.tendermintClient.BroadcastTxSync(context.Background(), txBytes)
 	if err != nil {
-		http.Error(w, "Internal Server Error: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Consensus error: "+err.Error(), http.StatusInternalServerError)
 		server.logger.Error("Failed to broadcast transaction", "err", err)
 		return
 	}
 
-	// Check if transaction was accepted
-	if result.Code != 0 {
-		http.Error(w, "Transaction Rejected: "+result.Log, http.StatusBadRequest)
-		server.logger.Error("Transaction rejected", "code", result.Code, "log", result.Log)
-		return
+	// Parse height from response
+	var blockHeight string
+	result, ok := tendermintResponse["result"].(map[string]interface{})
+	fmt.Println("=== TENDERMINT RESPONSE ===")
+	fmt.Println(result)
+	if ok {
+		blockHeight, _ = result["height"].(string)
 	}
 
-	// Create transaction ID
-	txID := generateTxID(requestID, string(server.node.NodeInfo().ID()))
-
-	// Wait for transaction to be included in a block
-	maxWaitTime := 10 * time.Second
-	interval := 100 * time.Millisecond
-	deadline := time.Now().Add(maxWaitTime)
-
-	var txStatus *TransactionStatus
-
-	for time.Now().Before(deadline) {
-		status, err := server.checkTransactionStatus(txID)
-		if err == nil && status != nil {
-			txStatus = status
-			break
-		}
-
-		time.Sleep(interval)
+	// Create response with consensus data
+	response := map[string]interface{}{
+		"webserviceData": apiResponse,
+		"consensusData": map[string]interface{}{
+			"height": blockHeight,
+		},
 	}
 
-	if txStatus == nil {
-		// We didn't get confirmation, but the transaction was accepted
-		// Return a response anyway, but note that it's not confirmed
-		txStatus = &TransactionStatus{
-			TxID:      txID,
-			RequestID: requestID,
-			Status:    "pending",
-		}
-	}
+	// Return the response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 
-	// Create client response
-	clientResponse := ClientResponse{
-		StatusCode:    dewsResponse.StatusCode,
-		Headers:       dewsResponse.Headers,
-		Body:          dewsResponse.Body,
-		Meta:          *txStatus,
-		BlockchainRef: fmt.Sprintf("/status/%s", txID),
-		NodeID:        string(server.node.NodeInfo().ID()),
-	}
-
-	// Set response headers
-	for key, value := range clientResponse.Headers {
-		w.Header().Set(key, value)
-	}
-
-	// Add DeWS-specific headers
-	w.Header().Set("DeWS-Transaction-ID", txID)
-	w.Header().Set("DeWS-Status", txStatus.Status)
-	if txStatus.BlockHeight > 0 {
-		w.Header().Set("DeWS-Block-Height", fmt.Sprintf("%d", txStatus.BlockHeight))
-	}
-
-	// Set status code
-	w.WriteHeader(clientResponse.StatusCode)
-
-	// Write response body
-	io.WriteString(w, clientResponse.Body)
+	totalTime := time.Since(startTime)
+	server.logger.Info("Total request time",
+		"path", r.URL.Path,
+		"method", r.Method,
+		"withConsensus", withConsensus,
+		"duration", totalTime)
 }
 
 // handleTransactionStatus returns the status of a transaction

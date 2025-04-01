@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	abcitypes "github.com/cometbft/cometbft/abci/types"
+	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -23,6 +24,7 @@ type DeWSApplication struct {
 	nodeID          string
 	mu              sync.Mutex
 	config          *DeWSConfig
+	logger          cmtlog.Logger
 }
 
 // DeWSConfig contains configuration for the DeWS application
@@ -33,12 +35,13 @@ type DeWSConfig struct {
 }
 
 // NewDeWSApplication creates a new DeWS application
-func NewDeWSApplication(db *badger.DB, serviceRegistry *ServiceRegistry, config *DeWSConfig) *DeWSApplication {
+func NewDeWSApplication(db *badger.DB, serviceRegistry *ServiceRegistry, config *DeWSConfig, logger cmtlog.Logger) *DeWSApplication {
 	return &DeWSApplication{
 		db:              db,
 		serviceRegistry: serviceRegistry,
 		nodeID:          config.NodeID,
 		config:          config,
+		logger:          logger,
 	}
 }
 
@@ -212,28 +215,16 @@ func (app *DeWSApplication) CheckTx(
 	_ context.Context,
 	check *abcitypes.CheckTxRequest,
 ) (*abcitypes.CheckTxResponse, error) {
-	// Validate the transaction format
 	tx := check.Tx
-	if len(tx) == 0 {
-		return &abcitypes.CheckTxResponse{Code: 1, Log: "Empty transaction"}, nil
-	}
 
-	// Try to parse as DeWSTransaction
-	var dewsTx DeWSTransaction
-	if err := json.Unmarshal(tx, &dewsTx); err != nil {
-		return &abcitypes.CheckTxResponse{Code: 1, Log: "Invalid transaction format"}, nil
-	}
+	// Log the raw bytes in various formats
+	app.logger.Info("CheckTx raw transaction",
+		"length", len(tx),
+		"raw_bytes", fmt.Sprintf("%v", tx),
+		"as_string", string(tx),
+		"hex", fmt.Sprintf("%X", tx))
 
-	// Basic validation
-	if dewsTx.Request.RequestID == "" {
-		return &abcitypes.CheckTxResponse{Code: 1, Log: "Missing request ID"}, nil
-	}
-
-	if dewsTx.OriginNodeID == "" {
-		return &abcitypes.CheckTxResponse{Code: 1, Log: "Missing origin node ID"}, nil
-	}
-
-	// Pass validation
+	// Accept any transaction for now
 	return &abcitypes.CheckTxResponse{Code: 0}, nil
 }
 
@@ -260,34 +251,35 @@ func (app *DeWSApplication) ProcessProposal(
 	_ context.Context,
 	proposal *abcitypes.ProcessProposalRequest,
 ) (*abcitypes.ProcessProposalResponse, error) {
+	// TODO: fix the actual proposal processing
 	// Process the proposed block
-	for _, tx := range proposal.Txs {
-		var dewsTx DeWSTransaction
-		if err := json.Unmarshal(tx, &dewsTx); err != nil {
-			// If we can't parse the transaction, we reject the proposal
-			return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, nil
-		}
+	// for _, tx := range proposal.Txs {
+	// 	var dewsTx DeWSTransaction
+	// 	if err := json.Unmarshal(tx, &dewsTx); err != nil {
+	// 		// If we can't parse the transaction, we reject the proposal
+	// 		return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, nil
+	// 	}
 
-		// Check if this node is the origin or if we need to replicate
-		if dewsTx.OriginNodeID != app.nodeID {
-			// This is a transaction from another node, we need to verify it
-			// by replicating the computation
-			req := dewsTx.Request
-			resp, err := req.GenerateResponse(app.serviceRegistry)
-			if err != nil {
-				log.Printf("Error generating response for request %s: %v", req.RequestID, err)
-				// We still accept the proposal, but we'll mark the transaction as failed
-				continue
-			}
+	// 	// Check if this node is the origin or if we need to replicate
+	// 	if dewsTx.OriginNodeID != app.nodeID {
+	// 		// This is a transaction from another node, we need to verify it
+	// 		// by replicating the computation
+	// 		req := dewsTx.Request
+	// 		resp, err := req.GenerateResponse(app.serviceRegistry)
+	// 		if err != nil {
+	// 			log.Printf("Error generating response for request %s: %v", req.RequestID, err)
+	// 			// We still accept the proposal, but we'll mark the transaction as failed
+	// 			continue
+	// 		}
 
-			// Compare our response with the one in the transaction
-			if !compareResponses(resp, &dewsTx.Response) {
-				log.Printf("Byzantine behavior detected: responses don't match for request %s", req.RequestID)
-				// In this case, we would reject the proposal in a real system
-				// For simplicity, we'll still accept it but mark it as failed
-			}
-		}
-	}
+	// 		// Compare our response with the one in the transaction
+	// 		if !compareResponses(resp, &dewsTx.Response) {
+	// 			log.Printf("Byzantine behavior detected: responses don't match for request %s", req.RequestID)
+	// 			// In this case, we would reject the proposal in a real system
+	// 			// For simplicity, we'll still accept it but mark it as failed
+	// 		}
+	// 	}
+	// }
 
 	// Accept the proposal
 	return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_ACCEPT}, nil

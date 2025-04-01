@@ -73,7 +73,9 @@ func main() {
 		RequiredVotes: 2,                      // For demo, 2 votes required
 		LogAllTxs:     true,
 	}
-	app := NewDeWSApplication(db, serviceRegistry, dewsConfig)
+	logger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
+
+	app := NewDeWSApplication(db, serviceRegistry, dewsConfig, logger)
 
 	//? Private Validator
 	pv := privval.LoadFilePV(
@@ -87,7 +89,6 @@ func main() {
 		log.Fatalf("failed to load node's key: %v", err)
 	}
 
-	logger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
 	logger, err = cmtflags.ParseLogLevel(config.LogLevel, logger, cfg.DefaultLogLevel)
 	if err != nil {
 		log.Fatalf("failed to parse log level: %v", err)
