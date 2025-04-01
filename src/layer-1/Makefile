@@ -11,19 +11,23 @@ all: build
 build:
 	@echo "Building DeWS-Replica..."
 	@mkdir -p ./build
-	@go build -o ./build/DeWS-Replica
+	@go build -o ./build/bin
 
 setup:
 	@echo "Setting up network with $(NODE_COUNT) nodes..."
-	@./setup-network-dynamic.sh -n $(NODE_COUNT) -p $(BASE_P2P_PORT) -r $(BASE_RPC_PORT) -h $(BASE_HTTP_PORT)
+	@./setup-network.sh -n $(NODE_COUNT) -p $(BASE_P2P_PORT) -r $(BASE_RPC_PORT) -h $(BASE_HTTP_PORT)
 
 run-local: build setup
 	@echo "Starting node0 (run additional nodes in separate terminals)..."
-	@./build/DeWS-Replica --cmt-home=./node0 --http-port $(BASE_HTTP_PORT)
+	@./build/DeWS-Replica --cmt-home=./node-config/node0 --http-port $(BASE_HTTP_PORT)
 
-run-docker:
+build-docker:
+	@echo "Building docker image..."
+	@docker build -t dews-image:latest .
+
+run-docker: build-docker
 	@echo "Setting up Docker network with $(NODE_COUNT) nodes..."
-	@./docker-setup.sh -n $(NODE_COUNT) -p $(BASE_P2P_PORT) -r $(BASE_RPC_PORT) -h $(BASE_HTTP_PORT)
+	@./setup-network.sh -n $(NODE_COUNT) -p $(BASE_P2P_PORT) -r $(BASE_RPC_PORT) -h $(BASE_HTTP_PORT)
 	@echo "Starting Docker containers..."
 	@docker-compose up -d --build
 
@@ -57,7 +61,7 @@ test-byzantine: build
 	@echo "Starting Byzantine test scenario..."
 	@echo "This will start 4 nodes with 1 node providing incorrect responses."
 	@echo "Setting up network..."
-	@./setup-network-dynamic.sh -n 4
+	@./setup-network.sh -n 4
 	@echo "Modifying node3 to provide incorrect responses..."
 	@# This would require implementing a Byzantine behavior toggle in the code
 	@echo "Starting nodes in separate terminals (you'll need to do this manually):"

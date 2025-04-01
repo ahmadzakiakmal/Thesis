@@ -15,7 +15,7 @@ The traditional "request-compute-response" model is replaced with a "request-com
 
 ## Prerequisites
 
-- Go 1.19+
+- Go 1.23+
 - CometBFT (installed via `go install github.com/cometbft/cometbft/cmd/cometbft@latest`)
 - jq (for processing JSON in setup scripts)
 
@@ -27,7 +27,7 @@ For Docker setup:
 
 ### Flexible Setup
 
-The system now supports flexible configuration with a variable number of nodes:
+The system supports flexible configuration with a variable number of nodes:
 
 ```bash
 # Get dependencies and build the go binary
@@ -54,41 +54,6 @@ A network can tolerate up to f=(n-1)/3 Byzantine faults, where n is the number o
 - 4 nodes: tolerates 1 fault
 - 7 nodes: tolerates 2 faults
 - 10 nodes: tolerates 3 faults
-
-### Running Locally
-
-After setting up the network, build the application:
-
-```bash
-go build -o ./build/DeWS-Replica
-```
-
-Then run each node in separate terminals:
-
-```bash
-# Node 0
-./build/DeWS-Replica --cmt-home=./node0 --http-port 5000
-
-# Node 1
-./build/DeWS-Replica --cmt-home=./node1 --http-port 5001
-
-# ... continue for all nodes
-```
-
-### Docker Setup
-
-For a more reliable setup, especially with more than 2 nodes, use Docker:
-
-```bash
-# Setup with default 4 nodes
-./setup-docker.sh
-
-# Setup with custom number of nodes
-./setup-docker.sh -n 7
-
-# Start the containers
-docker-compose up -d --build
-```
 
 This will create and start all nodes in separate containers with appropriate networking.
 
@@ -122,6 +87,9 @@ Access the web interface for each node at:
 ## API Endpoints
 
 The system provides the following REST APIs:
+
+### Debug Endpoint
+- `GET /debug` - View node informations to help debug
 
 ### Customer Management
 - `POST /api/customers` - Create a new customer
