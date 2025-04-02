@@ -80,27 +80,24 @@ This will create and start all nodes in separate containers with appropriate net
 A Makefile is provided for common operations:
 
 ```bash
-# Build the application
-make build
+# Build the source code binary
+make build-bin
 
-# Run locally with default settings
-make run-local
+# Run 1 node locally for development
+make run-dev
 
-# Run with Docker
-make run-docker
+# Run with Docker, 4 nodes
+make run-4
 
-# Clean all generated files
-make clean
+# Run with Docker, 10 nodes
+make run-10
+
+# Run with Docker, 15 nodes
+make run-15
+
+# Clean docker environments
+make docker-clean
 ```
-
-## Accessing the Nodes
-
-Access the web interface for each node at:
-
-- Node 0: http://localhost:5000
-- Node 1: http://localhost:5001
-- Node 2: http://localhost:5002
-- ... and so on
 
 ## API Endpoints
 

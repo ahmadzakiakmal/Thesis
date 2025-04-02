@@ -11,6 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/app"
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/server"
+	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-1/service-registry"
 	cfg "github.com/cometbft/cometbft/config"
 	cmtflags "github.com/cometbft/cometbft/libs/cli/flags"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
@@ -64,18 +67,18 @@ func main() {
 	}()
 
 	//? Initialize Service Registry
-	serviceRegistry := NewServiceRegistry()
+	serviceRegistry := service_registry.NewServiceRegistry()
 	serviceRegistry.RegisterDefaultServices()
 
 	//? Create DeWS Application
-	dewsConfig := &DeWSConfig{
+	dewsConfig := &app.DeWSConfig{
 		NodeID:        filepath.Base(homeDir), // Use directory name as node ID
 		RequiredVotes: 2,                      // For demo, 2 votes required
 		LogAllTxs:     true,
 	}
 	logger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
 
-	app := NewDeWSApplication(db, serviceRegistry, dewsConfig, logger)
+	app := app.NewDeWSApplication(db, serviceRegistry, dewsConfig, logger)
 
 	//? Private Validator
 	pv := privval.LoadFilePV(
@@ -118,7 +121,7 @@ func main() {
 	}()
 
 	//? Start DeWS Web Server
-	webserver, err := NewDeWSWebServer(app, httpPort, logger, node, serviceRegistry)
+	webserver, err := server.NewDeWSWebServer(app, httpPort, logger, node, serviceRegistry)
 	if err != nil {
 		log.Fatalf("Creating web server: %v", err)
 	}

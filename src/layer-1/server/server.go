@@ -1,20 +1,19 @@
-package main
+package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/app"
+	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-1/service-registry"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	nm "github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/rpc/client"
@@ -23,13 +22,13 @@ import (
 
 // DeWSWebServer handles HTTP requests using the DeWS protocol
 type DeWSWebServer struct {
-	app              *DeWSApplication
+	app              *app.DeWSApplication
 	httpAddr         string
 	server           *http.Server
 	logger           cmtlog.Logger
 	node             *nm.Node
 	startTime        time.Time
-	serviceRegistry  *ServiceRegistry
+	serviceRegistry  *service_registry.ServiceRegistry
 	tendermintClient client.Client
 	peers            map[string]string // nodeID -> RPC URL
 	peersMu          sync.RWMutex
@@ -72,7 +71,7 @@ type ClientResponse struct {
 }
 
 // NewDeWSWebServer creates a new DeWS web server
-func NewDeWSWebServer(app *DeWSApplication, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *ServiceRegistry) (*DeWSWebServer, error) {
+func NewDeWSWebServer(app *app.DeWSApplication, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *service_registry.ServiceRegistry) (*DeWSWebServer, error) {
 	mux := http.NewServeMux()
 
 	rpcAddr := fmt.Sprintf("http://localhost:%s", extractPortFromAddress(node.Config().RPC.ListenAddress))
@@ -185,82 +184,6 @@ func (server *DeWSWebServer) discoverPeers() {
 	}
 }
 
-func (server *DeWSWebServer) directBroadcastTxCommit(txData string) (map[string]interface{}, error) {
-	// Base64 encode the transaction
-	txBase64 := base64.StdEncoding.EncodeToString([]byte(txData))
-
-	// Create JSON-RPC request
-	requestBody := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "broadcast_tx_commit",
-		"params": map[string]interface{}{
-			"tx": txBase64, // Send as base64 encoded
-		},
-	}
-
-	requestJSON, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// Log the exact request being sent
-	server.logger.Info("Sending RPC request", "body", string(requestJSON))
-
-	// Send the request
-	rpcAddr := fmt.Sprintf("http://localhost:%s", extractPortFromAddress(server.node.Config().RPC.ListenAddress))
-	resp, err := http.Post(rpcAddr, "application/json", bytes.NewReader(requestJSON))
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Read and log the response
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	server.logger.Info("RPC response", "status", resp.Status, "body", string(respBody))
-
-	// Parse the response
-	var result map[string]interface{}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result, nil
-}
-
-// Add this function to your DeWSWebServer struct
-func (server *DeWSWebServer) processAPIRequest(method, path string, data interface{}) (interface{}, error) {
-	// This is a simplified version - you'll need to expand this based on your API needs
-	switch {
-	case method == "GET" && path == "customers":
-		// Get all customers
-		// In a real implementation, this would query your database
-		return []map[string]interface{}{
-			{"id": 1, "name": "John Doe", "email": "john@example.com", "address": "123 Main St"},
-			{"id": 2, "name": "Jane Smith", "email": "jane@example.com", "address": "456 Oak Ave"},
-		}, nil
-
-	case method == "POST" && path == "customers":
-		// Create a new customer
-		// In a real implementation, this would insert into your database
-		customerData, ok := data.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("invalid customer data format")
-		}
-
-		// Mock customer creation with a new ID
-		customerData["id"] = time.Now().Unix()
-		return customerData, nil
-
-	default:
-		return nil, fmt.Errorf("unsupported API endpoint: %s %s", method, path)
-	}
-}
-
 // handleRoot handles the root endpoint which shows node status
 func (server *DeWSWebServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -269,19 +192,13 @@ func (server *DeWSWebServer) handleRoot(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "text/html")
-	// nodeTemplate, err := template.ParseFiles("templates/node.tmpl")
-	// if err != nil {
-	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
-	// 	return
-	// }
-
-	// Similar to original server.go, display node status
-	// You can reuse the NodeData structure and related code
-	// ...
 
 	w.Write([]byte("<h1>DeWS Node</h1>"))
 	w.Write([]byte("<p>Node ID: " + string(server.node.NodeInfo().ID()) + "</p>"))
 	w.Write([]byte("<p>This node implements the DeWS protocol (Decentralized and Byzantine Fault-tolerant Web Services)</p>"))
+	rpcPort := extractPortFromAddress(server.node.Config().RPC.ListenAddress)
+	rpcAddrHtml := fmt.Sprintf("<p>RPC Address: <a href=\"http://localhost:%s\">http://localhost:%s</a>", rpcPort, rpcPort)
+	w.Write([]byte(rpcAddrHtml))
 }
 
 // handleDebug provides debugging information
@@ -363,7 +280,7 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Convert HTTP request to DeWSRequest
-	dewsRequest, err := ConvertHTTPRequestToDeWSRequest(r, requestID)
+	dewsRequest, err := service_registry.ConvertHTTPRequestToDeWSRequest(r, requestID)
 	if err != nil {
 		http.Error(w, "Failed to process request: "+err.Error(), http.StatusBadRequest)
 		server.logger.Error("Failed to convert HTTP request", "err", err)
@@ -395,10 +312,10 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create a complete DeWS transaction
-	dewsTransaction := &DeWSTransaction{
+	dewsTransaction := &service_registry.DeWSTransaction{
 		Request:      *dewsRequest,
 		Response:     *dewsResponse,
-		OriginNodeID: server.app.config.NodeID,
+		OriginNodeID: string(server.node.ConsensusReactor().Switch.NodeInfo().ID()),
 		BlockHeight:  0, // Will be filled by the consensus process
 	}
 
@@ -449,7 +366,7 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 		BlockchainRef: fmt.Sprintf("/status/%s", hex.EncodeToString(tendermintResponse.Hash)),
-		NodeID:        server.app.nodeID,
+		NodeID:        dewsTransaction.OriginNodeID,
 	}
 
 	// Return the response with blockchain reference
@@ -476,7 +393,9 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 		"duration", totalTime)
 
 	server.logger.Info("=== RESULT ===",
-		dewsTransaction,
+		dewsTransaction.Request.Path,
+		dewsTransaction.Request.Method,
+		dewsTransaction.Request.Body,
 	)
 }
 
@@ -535,7 +454,7 @@ func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionSt
 	tx := res.Txs[0]
 
 	// Parse the transaction
-	var dewsTx DeWSTransaction
+	var dewsTx service_registry.DeWSTransaction
 	err = json.Unmarshal(tx.Tx, &dewsTx)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing transaction: %w", err)
@@ -588,7 +507,7 @@ func (server *DeWSWebServer) countPeers() int {
 	return len(server.peers)
 }
 
-// Helper Functions
+//? Helper Functions
 
 // generateRequestID generates a unique request ID
 func generateRequestID() (string, error) {

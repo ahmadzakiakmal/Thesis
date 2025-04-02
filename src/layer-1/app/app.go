@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"log"
 	"sync"
 
+	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-1/service-registry"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"github.com/dgraph-io/badger/v4"
@@ -20,7 +21,7 @@ import (
 type DeWSApplication struct {
 	db              *badger.DB
 	onGoingBlock    *badger.Txn
-	serviceRegistry *ServiceRegistry
+	serviceRegistry *service_registry.ServiceRegistry
 	nodeID          string
 	mu              sync.Mutex
 	config          *DeWSConfig
@@ -35,7 +36,7 @@ type DeWSConfig struct {
 }
 
 // NewDeWSApplication creates a new DeWS application
-func NewDeWSApplication(db *badger.DB, serviceRegistry *ServiceRegistry, config *DeWSConfig, logger cmtlog.Logger) *DeWSApplication {
+func NewDeWSApplication(db *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *DeWSConfig, logger cmtlog.Logger) *DeWSApplication {
 	return &DeWSApplication{
 		db:              db,
 		serviceRegistry: serviceRegistry,
@@ -220,9 +221,10 @@ func (app *DeWSApplication) CheckTx(
 	// Log the raw bytes in various formats
 	app.logger.Info("CheckTx raw transaction",
 		"length", len(tx),
-		"raw_bytes", fmt.Sprintf("%v", tx),
+		// "raw_bytes", fmt.Sprintf("%v", tx),
 		"as_string", string(tx),
-		"hex", fmt.Sprintf("%X", tx))
+		// "hex", fmt.Sprintf("%X", tx),
+	)
 
 	// Accept any transaction for now
 	return &abcitypes.CheckTxResponse{Code: 0}, nil
@@ -253,7 +255,7 @@ func (app *DeWSApplication) ProcessProposal(
 ) (*abcitypes.ProcessProposalResponse, error) {
 	// Process the proposed block
 	for _, tx := range proposal.Txs {
-		var dewsTx DeWSTransaction
+		var dewsTx service_registry.DeWSTransaction
 		if err := json.Unmarshal(tx, &dewsTx); err != nil {
 			// If we can't parse the transaction, we reject the proposal
 			return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, nil
@@ -297,7 +299,7 @@ func (app *DeWSApplication) FinalizeBlock(
 	app.onGoingBlock = app.db.NewTransaction(true)
 
 	for i, txBytes := range req.Txs {
-		var tx DeWSTransaction
+		var tx service_registry.DeWSTransaction
 
 		if err := json.Unmarshal(txBytes, &tx); err != nil {
 			txResults[i] = &abcitypes.ExecTxResult{Code: 1, Log: "Invalid transaction format"}
@@ -437,7 +439,7 @@ func (app *DeWSApplication) VerifyVoteExtension(
 // Helper Functions
 
 // storeTransaction stores the transaction in the database
-func (app *DeWSApplication) storeTransaction(txID string, tx *DeWSTransaction, status string, rawTx []byte) *abcitypes.ExecTxResult {
+func (app *DeWSApplication) storeTransaction(txID string, tx *service_registry.DeWSTransaction, status string, rawTx []byte) *abcitypes.ExecTxResult {
 	// Store the transaction
 	txKey := append([]byte("tx:"), []byte(txID)...)
 	err := app.onGoingBlock.Set(txKey, rawTx)
@@ -487,7 +489,7 @@ func (app *DeWSApplication) storeTransaction(txID string, tx *DeWSTransaction, s
 }
 
 // compareResponses compares two DeWSResponse objects for equality
-func compareResponses(a, b *DeWSResponse) bool {
+func compareResponses(a, b *service_registry.DeWSResponse) bool {
 	// Compare status code
 	if a.StatusCode != b.StatusCode {
 		return false
