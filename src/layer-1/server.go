@@ -19,7 +19,6 @@ import (
 	nm "github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/rpc/client"
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
-	"github.com/google/uuid"
 )
 
 // DeWSWebServer handles HTTP requests using the DeWS protocol
@@ -357,36 +356,25 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 
 	// Generate a unique request ID
 	requestID, err := generateRequestID()
-	fmt.Println(requestID)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		server.logger.Error("Failed to generate request ID", "err", err)
 		return
 	}
 
-	// Parse and process the request locally
-	var requestData interface{}
-	if r.Method == http.MethodPost || r.Method == http.MethodPut {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "Failed to read request body", http.StatusBadRequest)
-			return
-		}
-
-		if err := json.Unmarshal(body, &requestData); err != nil {
-			http.Error(w, "Invalid JSON in request body", http.StatusBadRequest)
-			return
-		}
+	// Convert HTTP request to DeWSRequest
+	dewsRequest, err := ConvertHTTPRequestToDeWSRequest(r, requestID)
+	if err != nil {
+		http.Error(w, "Failed to process request: "+err.Error(), http.StatusBadRequest)
+		server.logger.Error("Failed to convert HTTP request", "err", err)
+		return
 	}
 
-	// Extract path without the /api/ prefix
-	apiPath := strings.TrimPrefix(r.URL.Path, "/api/")
-
-	// Generate response locally (similar to what the original code does)
-	apiResponse, err := server.processAPIRequest(r.Method, apiPath, requestData)
+	// Generate response locally by processing the request
+	dewsResponse, err := dewsRequest.GenerateResponse(server.serviceRegistry)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		server.logger.Error("Failed to process API request", "err", err)
+		http.Error(w, "Failed to process request: "+err.Error(), http.StatusInternalServerError)
+		server.logger.Error("Failed to generate response", "err", err)
 		return
 	}
 
@@ -396,39 +384,35 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// If consensus is disabled, return response immediately
 	if !withConsensus {
 		server.logger.Info("Skipping consensus", "path", r.URL.Path)
-		response := map[string]interface{}{
-			"webserviceData": apiResponse,
-			"consensusData":  nil,
-		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		// Write the response headers
+		for key, value := range dewsResponse.Headers {
+			w.Header().Set(key, value)
+		}
+		w.WriteHeader(dewsResponse.StatusCode)
+		w.Write([]byte(dewsResponse.Body))
 		return
 	}
 
-	// Create transaction for consensus
-	id := uuid.NewString()
-	tx := map[string]string{
-		"method":      r.Method,
-		"path":        apiPath,
-		"timestamp":   time.Now().Format(time.RFC3339),
-		"transaction": "Create User",
-		"id":          id,
+	// Create a complete DeWS transaction
+	dewsTransaction := &DeWSTransaction{
+		Request:      *dewsRequest,
+		Response:     *dewsResponse,
+		OriginNodeID: server.app.config.NodeID,
+		BlockHeight:  0, // Will be filled by the consensus process
 	}
-	server.logger.Info("Tx Received", tx["method"], tx["path"], tx["timestamp"])
 
-	// Convert map to JSON string
-	txJSON, err := json.Marshal(tx)
+	// Serialize the transaction
+	txBytes, err := dewsTransaction.SerializeToBytes()
 	if err != nil {
-		http.Error(w, "Failed to serialize transaction", http.StatusInternalServerError)
+		http.Error(w, "Failed to serialize transaction: "+err.Error(), http.StatusInternalServerError)
 		server.logger.Error("Failed to serialize transaction", "err", err)
 		return
 	}
-	txString := string(txJSON)
 
 	// Broadcast transaction and wait for commitment
 	consensusStart := time.Now()
-	tendermintResponse, err := server.directBroadcastTxCommit(txString)
+	tendermintResponse, err := server.tendermintClient.BroadcastTxCommit(context.Background(), txBytes)
 	consensusTime := time.Since(consensusStart)
 	server.logger.Info("Consensus time", "duration", consensusTime)
 
@@ -438,26 +422,51 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse height from response
-	var blockHeight string
-	result, ok := tendermintResponse["result"].(map[string]interface{})
-	fmt.Println("=== TENDERMINT RESPONSE ===")
-	fmt.Println(result)
-	if ok {
-		blockHeight, _ = result["height"].(string)
-	}
+	// Update the transaction with the block height from the response
+	blockHeight := tendermintResponse.Height
+	dewsTransaction.BlockHeight = blockHeight
 
-	// Create response with consensus data
-	response := map[string]interface{}{
-		"webserviceData": apiResponse,
-		"consensusData": map[string]interface{}{
-			"height": blockHeight,
+	// Create a client response with metadata
+	clientResponse := ClientResponse{
+		StatusCode: dewsResponse.StatusCode,
+		Headers:    dewsResponse.Headers,
+		Body:       dewsResponse.Body,
+		Meta: TransactionStatus{
+			TxID:        hex.EncodeToString(tendermintResponse.Hash),
+			RequestID:   requestID,
+			Status:      "confirmed",
+			BlockHeight: blockHeight,
+			BlockHash:   hex.EncodeToString(tendermintResponse.Hash),
+			ConfirmTime: time.Now(),
+			ResponseInfo: ResponseInfo{
+				StatusCode:  dewsResponse.StatusCode,
+				ContentType: dewsResponse.Headers["Content-Type"],
+				BodyLength:  len(dewsResponse.Body),
+			},
+			ConsensusInfo: ConsensusInfo{
+				TotalNodes:     server.countPeers() + 1, // +1 for this node
+				AgreementNodes: server.countPeers() + 1, // Simplified - assumes all nodes agree
+			},
 		},
+		BlockchainRef: fmt.Sprintf("/status/%s", hex.EncodeToString(tendermintResponse.Hash)),
+		NodeID:        server.app.nodeID,
 	}
 
-	// Return the response
+	// Return the response with blockchain reference
+	for key, value := range dewsResponse.Headers {
+		w.Header().Set(key, value)
+	}
+
+	// Override content type to ensure it's JSON regardless of the original response
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+
+	// Write response body
+	w.WriteHeader(dewsResponse.StatusCode)
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(clientResponse); err != nil {
+		server.logger.Error("Failed to encode client response", "err", err)
+	}
 
 	totalTime := time.Since(startTime)
 	server.logger.Info("Total request time",
@@ -465,6 +474,10 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 		"method", r.Method,
 		"withConsensus", withConsensus,
 		"duration", totalTime)
+
+	server.logger.Info("=== RESULT ===",
+		dewsTransaction,
+	)
 }
 
 // handleTransactionStatus returns the status of a transaction

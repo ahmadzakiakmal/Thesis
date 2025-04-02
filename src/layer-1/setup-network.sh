@@ -225,8 +225,8 @@ echo "Note: You need to build the dews-image first: docker build -t dews-image:l
 
 # Fix permissions for Docker access
 echo "Setting appropriate permissions for Docker..."
-sudo chmod -R 766 "$BASE_DIR"
-sudo chown -R $(id -u):$(id -g) "$BASE_DIR"
+sudo chown -R $(id -u):$(id -g) node-config/
+sudo chmod -R 777 node-config/
 # Ensure any badger directories are writable
 for i in $(seq 0 $((NODE_COUNT - 1))); do
     if [ -d "$BASE_DIR/node$i/badger" ]; then
