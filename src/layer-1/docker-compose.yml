@@ -55,6 +55,160 @@ services:
     networks:
       - dews-network
 
+  cometbft-node4:
+    image: dews-image:latest
+    container_name: cometbft-node4
+    ports:
+      - "5004:5004"
+      - "9008:9008"
+      - "9009:9009"
+    volumes:
+      - ./node-config/node4:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5004"
+    networks:
+      - dews-network
+
+  cometbft-node5:
+    image: dews-image:latest
+    container_name: cometbft-node5
+    ports:
+      - "5005:5005"
+      - "9010:9010"
+      - "9011:9011"
+    volumes:
+      - ./node-config/node5:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5005"
+    networks:
+      - dews-network
+
+  cometbft-node6:
+    image: dews-image:latest
+    container_name: cometbft-node6
+    ports:
+      - "5006:5006"
+      - "9012:9012"
+      - "9013:9013"
+    volumes:
+      - ./node-config/node6:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5006"
+    networks:
+      - dews-network
+
+  cometbft-node7:
+    image: dews-image:latest
+    container_name: cometbft-node7
+    ports:
+      - "5007:5007"
+      - "9014:9014"
+      - "9015:9015"
+    volumes:
+      - ./node-config/node7:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5007"
+    networks:
+      - dews-network
+
+  cometbft-node8:
+    image: dews-image:latest
+    container_name: cometbft-node8
+    ports:
+      - "5008:5008"
+      - "9016:9016"
+      - "9017:9017"
+    volumes:
+      - ./node-config/node8:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5008"
+    networks:
+      - dews-network
+
+  cometbft-node9:
+    image: dews-image:latest
+    container_name: cometbft-node9
+    ports:
+      - "5009:5009"
+      - "9018:9018"
+      - "9019:9019"
+    volumes:
+      - ./node-config/node9:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5009"
+    networks:
+      - dews-network
+
+  cometbft-node10:
+    image: dews-image:latest
+    container_name: cometbft-node10
+    ports:
+      - "5010:5010"
+      - "9020:9020"
+      - "9021:9021"
+    volumes:
+      - ./node-config/node10:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5010"
+    networks:
+      - dews-network
+
+  cometbft-node11:
+    image: dews-image:latest
+    container_name: cometbft-node11
+    ports:
+      - "5011:5011"
+      - "9022:9022"
+      - "9023:9023"
+    volumes:
+      - ./node-config/node11:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5011"
+    networks:
+      - dews-network
+
+  cometbft-node12:
+    image: dews-image:latest
+    container_name: cometbft-node12
+    ports:
+      - "5012:5012"
+      - "9024:9024"
+      - "9025:9025"
+    volumes:
+      - ./node-config/node12:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5012"
+    networks:
+      - dews-network
+
+  cometbft-node13:
+    image: dews-image:latest
+    container_name: cometbft-node13
+    ports:
+      - "5013:5013"
+      - "9026:9026"
+      - "9027:9027"
+    volumes:
+      - ./node-config/node13:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5013"
+    networks:
+      - dews-network
+
+  cometbft-node14:
+    image: dews-image:latest
+    container_name: cometbft-node14
+    ports:
+      - "5014:5014"
+      - "9028:9028"
+      - "9029:9029"
+    volumes:
+      - ./node-config/node14:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5014"
+    networks:
+      - dews-network
+
 networks:
   dews-network:
     driver: bridge

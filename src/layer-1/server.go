@@ -407,18 +407,28 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create transaction for consensus
+	id := uuid.NewString()
 	tx := map[string]string{
-		"method":    r.Method,
-		"path":      apiPath,
-		"timestamp": time.Now().Format(time.RFC3339),
+		"method":      r.Method,
+		"path":        apiPath,
+		"timestamp":   time.Now().Format(time.RFC3339),
+		"transaction": "Create User",
+		"id":          id,
 	}
 	server.logger.Info("Tx Received", tx["method"], tx["path"], tx["timestamp"])
-	// TODO: use real transaction
-	simpleTx := "test_tx" + uuid.NewString()
+
+	// Convert map to JSON string
+	txJSON, err := json.Marshal(tx)
+	if err != nil {
+		http.Error(w, "Failed to serialize transaction", http.StatusInternalServerError)
+		server.logger.Error("Failed to serialize transaction", "err", err)
+		return
+	}
+	txString := string(txJSON)
 
 	// Broadcast transaction and wait for commitment
 	consensusStart := time.Now()
-	tendermintResponse, err := server.directBroadcastTxCommit(simpleTx)
+	tendermintResponse, err := server.directBroadcastTxCommit(txString)
 	consensusTime := time.Since(consensusStart)
 	server.logger.Info("Consensus time", "duration", consensusTime)
 

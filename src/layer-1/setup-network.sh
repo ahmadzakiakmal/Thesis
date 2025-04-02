@@ -42,9 +42,6 @@ if [ $NODE_COUNT -lt 4 ]; then
     fi
 fi
 
-echo "Clearing existing configs"
-sudo rm -rf node-config
-
 echo "Setting up a network with $NODE_COUNT nodes"
 echo "Base directory: $BASE_DIR"
 echo "Base P2P port: $BASE_P2P_PORT"
@@ -228,7 +225,8 @@ echo "Note: You need to build the dews-image first: docker build -t dews-image:l
 
 # Fix permissions for Docker access
 echo "Setting appropriate permissions for Docker..."
-sudo chmod -R 755 "$BASE_DIR"
+sudo chmod -R 766 "$BASE_DIR"
+sudo chown -R $(id -u):$(id -g) "$BASE_DIR"
 # Ensure any badger directories are writable
 for i in $(seq 0 $((NODE_COUNT - 1))); do
     if [ -d "$BASE_DIR/node$i/badger" ]; then

@@ -1,6 +1,6 @@
 # DeWS Replica
 
-An implementation replica for [DeWS: Decentralized and Byzantine Fault-tolerant Web Services](https://ieeexplore.ieee.org/document/10174949/). This implementation uses [CometBFT](https://github.com/cometbft/cometbft), the successor of Tendermint, to provide Byzantine Fault Tolerance.
+An implementation replica for [DeWS: Decentralized and Byzantine Fault-tolerant Web Services](https://ieeexplore.ieee.org/document/10174949/). This implementation uses Go and [CometBFT](https://github.com/cometbft/cometbft), the successor of Tendermint, to provide Byzantine Fault Tolerance.
 
 ## What is DeWS?
 
@@ -24,6 +24,24 @@ For Docker setup:
 - Docker Compose
 
 ## Setup and Running
+
+### For Dev
+
+Run single validator system locally
+
+```
+./setup-network.sh -n 1
+
+# Optional: Disable empty block creation so the log doesnt get too crowded
+./setup-network.sh -n 1 -e
+
+# Run manually
+go build -o ./build/bin
+./build/bin --cmt-home=./node-config/node0
+
+# Or use Make
+make run-dev
+```
 
 ### Flexible Setup
 
