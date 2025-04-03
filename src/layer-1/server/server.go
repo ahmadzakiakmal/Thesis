@@ -14,10 +14,12 @@ import (
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-1/app"
 	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-1/service-registry"
+
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	nm "github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/rpc/client"
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
+	"gorm.io/gorm"
 )
 
 // DeWSWebServer handles HTTP requests using the DeWS protocol
@@ -32,6 +34,7 @@ type DeWSWebServer struct {
 	tendermintClient client.Client
 	peers            map[string]string // nodeID -> RPC URL
 	peersMu          sync.RWMutex
+	database         *gorm.DB
 }
 
 // TransactionStatus represents the consensus status of a transaction
@@ -71,7 +74,7 @@ type ClientResponse struct {
 }
 
 // NewDeWSWebServer creates a new DeWS web server
-func NewDeWSWebServer(app *app.DeWSApplication, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *service_registry.ServiceRegistry) (*DeWSWebServer, error) {
+func NewDeWSWebServer(app *app.DeWSApplication, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *service_registry.ServiceRegistry, db *gorm.DB) (*DeWSWebServer, error) {
 	mux := http.NewServeMux()
 
 	rpcAddr := fmt.Sprintf("http://localhost:%s", extractPortFromAddress(node.Config().RPC.ListenAddress))
@@ -105,6 +108,7 @@ func NewDeWSWebServer(app *app.DeWSApplication, httpPort string, logger cmtlog.L
 		serviceRegistry:  serviceRegistry,
 		tendermintClient: tendermintClient,
 		peers:            make(map[string]string),
+		database:         db,
 	}
 
 	// Register routes
@@ -216,6 +220,7 @@ func (server *DeWSWebServer) handleDebug(w http.ResponseWriter, r *http.Request)
 	if !server.node.IsListening() {
 		nodeStatus = "offline"
 	}
+
 	debugInfo := map[string]interface{}{
 		"node_id":     string(server.node.NodeInfo().ID()),
 		"node_status": nodeStatus,
@@ -500,13 +505,6 @@ func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionSt
 	return txStatus, nil
 }
 
-// countPeers counts the number of peers
-func (server *DeWSWebServer) countPeers() int {
-	server.peersMu.RLock()
-	defer server.peersMu.RUnlock()
-	return len(server.peers)
-}
-
 //? Helper Functions
 
 // generateRequestID generates a unique request ID
@@ -527,4 +525,11 @@ func extractPortFromAddress(address string) string {
 		}
 	}
 	return ""
+}
+
+// countPeers counts the number of peers
+func (server *DeWSWebServer) countPeers() int {
+	server.peersMu.RLock()
+	defer server.peersMu.RUnlock()
+	return len(server.peers)
 }

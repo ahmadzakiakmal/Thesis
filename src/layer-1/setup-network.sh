@@ -210,15 +210,15 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     volumes:
       - $BASE_DIR/node$i:/root/.cometbft
     command: >
-      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port"
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:$postgres_port"
     networks:
       - dews-network
   postgres-node$i:
     image: postgres:14
     container_name: postgres-node$i
     environment:
-      POSTGRES_USER: dews$i
-      POSTGRES_PASSWORD: dewspassword$i
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
       POSTGRES_DB: dewsdb
     volumes:
       - postgres-data-node$i:/var/lib/postgresql/data
@@ -287,7 +287,8 @@ echo ""
 
 for i in $(seq 0 $((NODE_COUNT - 1))); do
     http_port=$((BASE_HTTP_PORT + i))
-    echo "Node $i: ./build/bin --cmt-home=$BASE_DIR/node$i --http-port $http_port"
+    postgres_port=$((BASE_POSTGRES_PORT + 1))
+    echo "Node $i: ./build/bin --cmt-home=$BASE_DIR/node$i --http-port $http_port --postgres-host=postgres-node$i:$postgres_port"
 done
 
 echo ""

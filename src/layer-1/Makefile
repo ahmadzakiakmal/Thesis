@@ -19,11 +19,12 @@ build-bin:
 
 run-dev-local: build-bin
 	@echo "Running 1 node with no empty block creation for dev..."
-	@sudo rm -rf node-config
+	@if [ -d node-config ]; then sudo rm -rf node-config; fi
 	@./setup-network.sh -n 1 -e
-	@./build/bin --cmt-home=./node-config/node0 --http-port $(BASE_HTTP_PORT)
+	@./build/bin --cmt-home=./node-config/node0 --http-port $(BASE_HTTP_PORT) --postgres-host=postgres-node0:5000
 
 allow-access:
+	@mkdir -p node-config
 	@sudo chown -R $(id -u):$(id -g) node-config/
 	@sudo chmod -R 777 node-config/
 
@@ -37,11 +38,11 @@ endif
 
 docker-clean:
 	@echo "Cleaning docker environment..."
-	@docker-compose -p layer-1 down
+	@docker-compose -p layer-1 down -v
 
 run-dev-docker: build-docker-image
 	@echo "Generating compose and node config for 1 node"
-	@sudo rm -rf node-config
+	@if [ -d node-config ]; then sudo rm -rf node-config; fi
 	@echo "Run without empty block generation"
 	@./setup-network.sh -n 1 -e
 	@echo "Clearing existing network..."
@@ -51,7 +52,7 @@ run-dev-docker: build-docker-image
 
 run: build-docker-image
 	@echo "Generating compose and node config for $(NODES) nodes"
-	@sudo rm -rf node-config
+	@if [ -d node-config ]; then sudo rm -rf node-config; fi
 ifeq ($(DEV), true)
 	@echo "Run without empty block generation"
 	@./setup-network.sh -n $(NODES) -e
@@ -64,11 +65,3 @@ endif
 	@echo "Composing network..."
 	@docker-compose up -d
 
-run-4:
-	@$(MAKE) run NODES=4
-
-run-10:
-	@$(MAKE) run NODES=10
-
-run-15:
-	@$(MAKE) run NODES=15

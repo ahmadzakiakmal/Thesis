@@ -13,6 +13,7 @@ import (
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-1/app"
 	"github.com/ahmadzakiakmal/thesis/src/layer-1/server"
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/server/models"
 	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-1/service-registry"
 	cfg "github.com/cometbft/cometbft/config"
 	cmtflags "github.com/cometbft/cometbft/libs/cli/flags"
@@ -23,16 +24,43 @@ import (
 	"github.com/cometbft/cometbft/proxy"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/spf13/viper"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 var (
-	homeDir  string
-	httpPort string
+	homeDir      string
+	httpPort     string
+	postgresHost string
+	DB           *gorm.DB
 )
 
 func init() {
 	flag.StringVar(&homeDir, "cmt-home", "", "Path to the CometBFT config directory")
-	flag.StringVar(&httpPort, "http-port", "6969", "HTTP web server port")
+	flag.StringVar(&httpPort, "http-port", "5000", "HTTP web server port")
+	flag.StringVar(&postgresHost, "postgres-host", "postgres-node0:5432", "DB address")
+
+	var err error
+	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/dewsdb", postgresHost)
+	log.Printf("Connecting to: %s\n", dsn)
+
+	for i := 0; i < 5; i++ {
+		log.Printf("Connection attempt %d...\n", i+1)
+		DB, err = gorm.Open(postgres.Open(dsn))
+		if err != nil {
+			log.Printf("Connection attempt %d, failed: %v\n", i+1, err)
+			time.Sleep(2 * time.Second)
+		} else {
+			break
+		}
+	}
+
+	if err != nil {
+		log.Fatal("Connection to db failed: ", err.Error())
+	}
+	DB.AutoMigrate(&models.User{})
+
+	log.Print("Connected to DB")
 }
 
 func main() {
@@ -67,7 +95,7 @@ func main() {
 	}()
 
 	//? Initialize Service Registry
-	serviceRegistry := service_registry.NewServiceRegistry()
+	serviceRegistry := service_registry.NewServiceRegistry(DB)
 	serviceRegistry.RegisterDefaultServices()
 
 	//? Create DeWS Application
@@ -121,7 +149,7 @@ func main() {
 	}()
 
 	//? Start DeWS Web Server
-	webserver, err := server.NewDeWSWebServer(app, httpPort, logger, node, serviceRegistry)
+	webserver, err := server.NewDeWSWebServer(app, httpPort, logger, node, serviceRegistry, DB)
 	if err != nil {
 		log.Fatalf("Creating web server: %v", err)
 	}

@@ -8,6 +8,10 @@ import (
 
 	"encoding/json"
 	"time"
+
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/server/models"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // DeWSRequest represents the client's original HTTP request
@@ -62,6 +66,7 @@ type ServiceRegistry struct {
 	handlers    map[RouteKey]ServiceHandler
 	exactRoutes map[RouteKey]bool // Whether a route is exact or pattern-based
 	mu          sync.RWMutex
+	database    *gorm.DB
 }
 
 // SerializeToBytes converts the transaction to a byte array for blockchain storage
@@ -109,10 +114,11 @@ func ConvertHTTPRequestToDeWSRequest(r *http.Request, requestID string) (*DeWSRe
 }
 
 // NewServiceRegistry creates a new service registry
-func NewServiceRegistry() *ServiceRegistry {
+func NewServiceRegistry(db *gorm.DB) *ServiceRegistry {
 	return &ServiceRegistry{
 		handlers:    make(map[RouteKey]ServiceHandler),
 		exactRoutes: make(map[RouteKey]bool),
+		database:    db,
 	}
 }
 
@@ -185,22 +191,68 @@ func matchPath(pattern, path string) bool {
 
 // RegisterDefaultServices sets up the default services for the DeWS system
 func (sr *ServiceRegistry) RegisterDefaultServices() {
-	// Example: Register a customer service
 	sr.RegisterHandler("POST", "/api/customers", true, func(req *DeWSRequest) (*DeWSResponse, error) {
-		// In a real implementation, this would create a customer in a database
+		var newUser models.User
+		err := json.Unmarshal([]byte(req.Body), &newUser)
+		if err != nil {
+			return &DeWSResponse{
+				StatusCode: http.StatusInternalServerError,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       "failed to parse body",
+			}, fmt.Errorf("failed to parse body")
+		}
+		id := uuid.NewString()
+		dbTx := sr.database.Begin()
+		err = dbTx.Create(&models.User{
+			ID:    id,
+			Name:  newUser.Name,
+			Email: newUser.Email,
+		}).Error
+		if err != nil {
+			dbTx.Rollback()
+			responseBody := fmt.Sprintf("error on database transaction: %s", dbTx.Error.Error())
+			return &DeWSResponse{
+				StatusCode: http.StatusInternalServerError,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       responseBody,
+			}, fmt.Errorf("error on database transaction: %s", dbTx.Error.Error())
+		}
+
+		dbTx.Commit()
 		return &DeWSResponse{
 			StatusCode: http.StatusCreated,
 			Headers:    map[string]string{"Content-Type": "application/json"},
-			Body:       fmt.Sprintf(`{"message":"Customer created successfully","id":"customer-123","requestId":"%s"}`, req.RequestID),
+			Body:       fmt.Sprintf(`{"message":"Customer created successfully","id":"%s","requestId":"%s"}`, id, req.RequestID),
 		}, nil
 	})
 
 	sr.RegisterHandler("GET", "/api/customers", true, func(req *DeWSRequest) (*DeWSResponse, error) {
-		// In a real implementation, this would get customers from a database
+		var customers []models.User
+		err := sr.database.Find(&customers).Error
+		if err != nil {
+			responseBody := fmt.Sprintf("error on database transaction: %s", err.Error())
+			return &DeWSResponse{
+				StatusCode: http.StatusUnprocessableEntity,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       responseBody,
+			}, fmt.Errorf("error on database transaction: %s", err.Error())
+		}
+
+		responseBody := map[string]interface{}{
+			"customers": customers,
+		}
+		jsonBytes, err := json.Marshal(responseBody)
+		if err != nil {
+			return &DeWSResponse{
+				StatusCode: http.StatusInternalServerError,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       `{"error":"failed to marshal response"}`,
+			}, nil
+		}
 		return &DeWSResponse{
 			StatusCode: http.StatusOK,
 			Headers:    map[string]string{"Content-Type": "application/json"},
-			Body:       `{"customers":[{"id":"customer-123","name":"Example Customer"}]}`,
+			Body:       string(jsonBytes),
 		}, nil
 	})
 
