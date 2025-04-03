@@ -7,6 +7,7 @@ BASE_RPC_PORT ?= 9001
 BASE_HTTP_PORT ?= 5000
 BASE_DIR ?= ./node-config
 
+NODES ?= 4 
 REBUILD ?= true
 # Use DEV to help debugging, turns off empty block generation
 DEV ?= true 
@@ -16,7 +17,7 @@ build-bin:
 	@mkdir -p ./build
 	@go build -o ./build/bin
 
-run-dev: build-bin
+run-dev-local: build-bin
 	@echo "Running 1 node with no empty block creation for dev..."
 	@sudo rm -rf node-config
 	@./setup-network.sh -n 1 -e
@@ -38,47 +39,36 @@ docker-clean:
 	@echo "Cleaning docker environment..."
 	@docker-compose -p layer-1 down
 
-run-4: build-docker-image
-	@echo "Generating compose and node config for 4 nodes"
+run-dev-docker: build-docker-image
+	@echo "Generating compose and node config for 1 node"
 	@sudo rm -rf node-config
-ifeq ($(DEV), true)
 	@echo "Run without empty block generation"
-	@./setup-network.sh -n 4 -e
-else
-	@echo "Run with empty block generation"
-	@./setup-network.sh -n 4
-endif
+	@./setup-network.sh -n 1 -e
 	@echo "Clearing existing network..."
 	@docker-compose -p layer-1 down
 	@echo "Composing network..."
 	@docker-compose up -d
-	
-run-10: build-docker-image
-	@echo "Generating compose and node config for 10 nodes"
+
+run: build-docker-image
+	@echo "Generating compose and node config for $(NODES) nodes"
 	@sudo rm -rf node-config
 ifeq ($(DEV), true)
 	@echo "Run without empty block generation"
-	@./setup-network.sh -n 10 -e
+	@./setup-network.sh -n $(NODES) -e
 else
 	@echo "Run with empty block generation"
-	@./setup-network.sh -n 10
+	@./setup-network.sh -n $(NODES)
 endif
 	@echo "Clearing existing network..."
 	@docker-compose -p layer-1 down
 	@echo "Composing network..."
 	@docker-compose up -d
 
-run-15: build-docker-image
-	@echo "Generating compose and node config for 15 nodes"
-	@sudo rm -rf node-config
-ifeq ($(DEV), true)
-	@echo "Run without empty block generation"
-	@./setup-network.sh -n 15 -e
-else
-	@echo "Run with empty block generation"
-	@./setup-network.sh -n 15
-endif
-	@echo "Clearing existing network..."
-	@docker-compose -p layer-1 down
-	@echo "Composing network..."
-	@docker-compose up -d
+run-4:
+	@$(MAKE) run NODES=4
+
+run-10:
+	@$(MAKE) run NODES=10
+
+run-15:
+	@$(MAKE) run NODES=15

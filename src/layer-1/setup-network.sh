@@ -7,6 +7,7 @@ BASE_RPC_PORT=9001
 BASE_HTTP_PORT=5000
 BASE_DIR="./node-config"
 DISABLE_EMPTY_BLOCKS=false
+BASE_POSTGRES_PORT=5432
 
 # Parse command line options
 while getopts ":n:d:p:r:h:e" opt; do
@@ -196,6 +197,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     p2p_port=$((BASE_P2P_PORT + i * 2))
     rpc_port=$((BASE_RPC_PORT + i * 2))
     http_port=$((BASE_HTTP_PORT + i))
+    postgres_port=$((BASE_POSTGRES_PORT + i))
 
     cat >>"./docker-compose.yml" <<EOL
   cometbft-node$i:
@@ -211,6 +213,19 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
       sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port"
     networks:
       - dews-network
+  postgres-node$i:
+    image: postgres:14
+    container_name: postgres-node$i
+    environment:
+      POSTGRES_USER: dews$i
+      POSTGRES_PASSWORD: dewspassword$i
+      POSTGRES_DB: dewsdb
+    volumes:
+      - postgres-data-node$i:/var/lib/postgresql/data
+    ports:
+      - "$postgres_port:5432"
+    networks:
+      - dews-network
 
 EOL
 done
@@ -219,7 +234,18 @@ cat >>"./docker-compose.yml" <<EOL
 networks:
   dews-network:
     driver: bridge
+
+volumes:
 EOL
+
+for i in $(seq 0 $((NODE_COUNT - 1))); do
+  echo "Setting up Postgres container for node $i..."
+  cat >> "./docker-compose.yml" << EOL
+  postgres-data-node$i:
+EOL
+done
+echo "Done setting up Postgres $i..."
+
 echo "docker-compose.yml created with $NODE_COUNT nodes"
 echo "Note: You need to build the dews-image first: docker build -t dews-image:latest ."
 
