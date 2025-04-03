@@ -175,7 +175,7 @@ func matchPath(pattern, path string) bool {
 		return false
 	}
 
-	for i := 0; i < len(patternParts); i++ {
+	for i := range len(patternParts) {
 		if strings.HasPrefix(patternParts[i], ":") {
 			// This is a parameter part, it matches anything
 			continue
@@ -210,12 +210,12 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 		}).Error
 		if err != nil {
 			dbTx.Rollback()
-			responseBody := fmt.Sprintf("error on database transaction: %s", dbTx.Error.Error())
+			responseBody := fmt.Sprintf("error on database transaction: %s", err.Error())
 			return &DeWSResponse{
 				StatusCode: http.StatusInternalServerError,
 				Headers:    map[string]string{"Content-Type": "application/json"},
 				Body:       responseBody,
-			}, fmt.Errorf("error on database transaction: %s", dbTx.Error.Error())
+			}, fmt.Errorf("error on database transaction: %s", err.Error())
 		}
 
 		dbTx.Commit()

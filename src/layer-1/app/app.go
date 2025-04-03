@@ -40,10 +40,14 @@ func NewDeWSApplication(db *badger.DB, serviceRegistry *service_registry.Service
 	return &DeWSApplication{
 		db:              db,
 		serviceRegistry: serviceRegistry,
-		nodeID:          config.NodeID,
+		nodeID:          "",
 		config:          config,
 		logger:          logger,
 	}
+}
+
+func (app *DeWSApplication) SetNodeID(id string) {
+	app.nodeID = id
 }
 
 // Info implements the ABCI Info method
@@ -260,9 +264,16 @@ func (app *DeWSApplication) ProcessProposal(
 			// If we can't parse the transaction, we reject the proposal
 			return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, nil
 		}
+		isNotOrigin := dewsTx.OriginNodeID != app.nodeID
+		app.logger.Info("Prepare Proposal", "Tx Origin", dewsTx.OriginNodeID, "ID", app.nodeID)
+		if isNotOrigin {
+			app.logger.Info("Prepare Proposal", "Tx Origin", "false")
+		} else {
+			app.logger.Info("Prepare Proposal", "Tx Origin", "true")
+		}
 
 		// Check if this node is the origin or if we need to replicate
-		if dewsTx.OriginNodeID != app.nodeID {
+		if isNotOrigin {
 			// This is a transaction from another node, we need to verify it
 			// by replicating the computation
 			req := dewsTx.Request

@@ -34,13 +34,6 @@ if [ $NODE_COUNT -lt 4 ]; then
     echo "Warning: At least 4 nodes are recommended for Byzantine Fault Tolerance."
     echo "The network can only tolerate up to f=(n-1)/3 faulty nodes."
     echo "With $NODE_COUNT nodes, the network cannot tolerate any faults."
-
-    # Ask for confirmation
-    read -p "Do you want to continue with $NODE_COUNT nodes? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
 fi
 
 echo "Setting up a network with $NODE_COUNT nodes"
@@ -210,7 +203,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     volumes:
       - $BASE_DIR/node$i:/root/.cometbft
     command: >
-      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:$postgres_port"
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:5432"
     networks:
       - dews-network
   postgres-node$i:

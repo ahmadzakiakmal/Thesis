@@ -26,9 +26,93 @@ services:
     networks:
       - dews-network
 
+  cometbft-node1:
+    image: dews-image:latest
+    container_name: cometbft-node1
+    ports:
+      - "5001:5001"
+      - "9002:9002"
+      - "9003:9003"
+    volumes:
+      - ./node-config/node1:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5001 --postgres-host=postgres-node1:5432"
+    networks:
+      - dews-network
+  postgres-node1:
+    image: postgres:14
+    container_name: postgres-node1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: dewsdb
+    volumes:
+      - postgres-data-node1:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - dews-network
+
+  cometbft-node2:
+    image: dews-image:latest
+    container_name: cometbft-node2
+    ports:
+      - "5002:5002"
+      - "9004:9004"
+      - "9005:9005"
+    volumes:
+      - ./node-config/node2:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5002 --postgres-host=postgres-node2:5432"
+    networks:
+      - dews-network
+  postgres-node2:
+    image: postgres:14
+    container_name: postgres-node2
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: dewsdb
+    volumes:
+      - postgres-data-node2:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    networks:
+      - dews-network
+
+  cometbft-node3:
+    image: dews-image:latest
+    container_name: cometbft-node3
+    ports:
+      - "5003:5003"
+      - "9006:9006"
+      - "9007:9007"
+    volumes:
+      - ./node-config/node3:/root/.cometbft
+    command: >
+      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5003 --postgres-host=postgres-node3:5432"
+    networks:
+      - dews-network
+  postgres-node3:
+    image: postgres:14
+    container_name: postgres-node3
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: dewsdb
+    volumes:
+      - postgres-data-node3:/var/lib/postgresql/data
+    ports:
+      - "5435:5432"
+    networks:
+      - dews-network
+
 networks:
   dews-network:
     driver: bridge
 
 volumes:
   postgres-data-node0:
+  postgres-data-node1:
+  postgres-data-node2:
+  postgres-data-node3:

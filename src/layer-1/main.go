@@ -39,28 +39,6 @@ func init() {
 	flag.StringVar(&homeDir, "cmt-home", "", "Path to the CometBFT config directory")
 	flag.StringVar(&httpPort, "http-port", "5000", "HTTP web server port")
 	flag.StringVar(&postgresHost, "postgres-host", "postgres-node0:5432", "DB address")
-
-	var err error
-	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/dewsdb", postgresHost)
-	log.Printf("Connecting to: %s\n", dsn)
-
-	for i := 0; i < 5; i++ {
-		log.Printf("Connection attempt %d...\n", i+1)
-		DB, err = gorm.Open(postgres.Open(dsn))
-		if err != nil {
-			log.Printf("Connection attempt %d, failed: %v\n", i+1, err)
-			time.Sleep(2 * time.Second)
-		} else {
-			break
-		}
-	}
-
-	if err != nil {
-		log.Fatal("Connection to db failed: ", err.Error())
-	}
-	DB.AutoMigrate(&models.User{})
-
-	log.Print("Connected to DB")
 }
 
 func main() {
@@ -81,6 +59,9 @@ func main() {
 	if err := config.ValidateBasic(); err != nil {
 		log.Fatalf("Invalid configuration data: %v", err)
 	}
+
+	//? Connect Postgresql DB
+	ConnectDB()
 
 	//? Initialize Badger DB
 	dbPath := filepath.Join(homeDir, "badger")
@@ -141,6 +122,9 @@ func main() {
 		log.Fatalf("Creating node: %v", err)
 	}
 
+	//? Pass Node ID to app
+	app.SetNodeID(string(node.NodeInfo().ID()))
+
 	//? Start CometBFT node
 	node.Start()
 	defer func() {
@@ -174,4 +158,28 @@ func main() {
 		logger.Error("Shutting down HTTP web server", "err", err)
 	}
 	logger.Info("HTTP web server gracefully stopped")
+}
+
+func ConnectDB() {
+	var err error
+	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/dewsdb", postgresHost)
+	log.Printf("Connecting to: %s\n", dsn)
+
+	for i := 0; i < 5; i++ {
+		log.Printf("Connection attempt %d...\n", i+1)
+		DB, err = gorm.Open(postgres.Open(dsn))
+		if err != nil {
+			log.Printf("Connection attempt %d, failed: %v\n", i+1, err)
+			time.Sleep(2 * time.Second)
+		} else {
+			break
+		}
+	}
+
+	if err != nil {
+		log.Fatal("Connection to db failed: ", err.Error())
+	}
+	DB.AutoMigrate(&models.User{})
+
+	log.Print("Connected to DB")
 }
