@@ -2,6 +2,7 @@ package service_registry
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,7 +11,7 @@ import (
 	"time"
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-1/server/models"
-	"github.com/google/uuid"
+	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"gorm.io/gorm"
 )
 
@@ -67,6 +68,7 @@ type ServiceRegistry struct {
 	exactRoutes map[RouteKey]bool // Whether a route is exact or pattern-based
 	mu          sync.RWMutex
 	database    *gorm.DB
+	logger      cmtlog.Logger
 }
 
 // SerializeToBytes converts the transaction to a byte array for blockchain storage
@@ -114,11 +116,12 @@ func ConvertHTTPRequestToDeWSRequest(r *http.Request, requestID string) (*DeWSRe
 }
 
 // NewServiceRegistry creates a new service registry
-func NewServiceRegistry(db *gorm.DB) *ServiceRegistry {
+func NewServiceRegistry(db *gorm.DB, logger cmtlog.Logger) *ServiceRegistry {
 	return &ServiceRegistry{
 		handlers:    make(map[RouteKey]ServiceHandler),
 		exactRoutes: make(map[RouteKey]bool),
 		database:    db,
+		logger:      logger,
 	}
 }
 
@@ -201,15 +204,17 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 				Body:       "failed to parse body",
 			}, fmt.Errorf("failed to parse body")
 		}
-		id := uuid.NewString()
 		dbTx := sr.database.Begin()
 		err = dbTx.Create(&models.User{
-			ID:    id,
 			Name:  newUser.Name,
 			Email: newUser.Email,
 		}).Error
+		log.Println("=========")
+		log.Printf("Registering User with email :%s\n", newUser.Email)
+		log.Println("=========")
 		if err != nil {
 			dbTx.Rollback()
+			log.Printf("Error on DB transaction: %s\n", err.Error())
 			responseBody := fmt.Sprintf("error on database transaction: %s", err.Error())
 			return &DeWSResponse{
 				StatusCode: http.StatusInternalServerError,
@@ -218,11 +223,12 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 			}, fmt.Errorf("error on database transaction: %s", err.Error())
 		}
 
+		log.Println("Success")
 		dbTx.Commit()
 		return &DeWSResponse{
 			StatusCode: http.StatusCreated,
 			Headers:    map[string]string{"Content-Type": "application/json"},
-			Body:       fmt.Sprintf(`{"message":"Customer created successfully","id":"%s","requestId":"%s"}`, id, req.RequestID),
+			Body:       fmt.Sprintf(`{"message":"Customer created successfully","email":"%s","requestId":"%s"}`, newUser.Email, req.RequestID),
 		}, nil
 	})
 

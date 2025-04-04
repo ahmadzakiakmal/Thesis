@@ -11,15 +11,18 @@ import (
 	"log"
 	"sync"
 
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/server/models"
 	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-1/service-registry"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"github.com/dgraph-io/badger/v4"
+	"gorm.io/gorm"
 )
 
 // DeWSApplication implements the ABCI interface for DeWS
 type DeWSApplication struct {
-	db              *badger.DB
+	badgerDB        *badger.DB
+	postgresDB      *gorm.DB
 	onGoingBlock    *badger.Txn
 	serviceRegistry *service_registry.ServiceRegistry
 	nodeID          string
@@ -36,13 +39,14 @@ type DeWSConfig struct {
 }
 
 // NewDeWSApplication creates a new DeWS application
-func NewDeWSApplication(db *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *DeWSConfig, logger cmtlog.Logger) *DeWSApplication {
+func NewDeWSApplication(badgerDB *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *DeWSConfig, logger cmtlog.Logger, db *gorm.DB) *DeWSApplication {
 	return &DeWSApplication{
-		db:              db,
+		badgerDB:        badgerDB,
 		serviceRegistry: serviceRegistry,
 		nodeID:          "",
 		config:          config,
 		logger:          logger,
+		postgresDB:      db,
 	}
 }
 
@@ -60,7 +64,7 @@ func (app *DeWSApplication) Info(
 	var lastBlockAppHash []byte
 
 	// Get last block info from DB
-	err := app.db.View(func(txn *badger.Txn) error {
+	err := app.badgerDB.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte("last_block_height"))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -127,7 +131,7 @@ func (app *DeWSApplication) Query(
 	// Handle regular key-value lookup
 	resp := abcitypes.QueryResponse{Key: req.Data}
 
-	dbErr := app.db.View(func(txn *badger.Txn) error {
+	dbErr := app.badgerDB.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(req.Data)
 
 		if err != nil {
@@ -160,7 +164,7 @@ func (app *DeWSApplication) Query(
 func (app *DeWSApplication) verifyTransaction(txID []byte) (*abcitypes.QueryResponse, error) {
 	var resp abcitypes.QueryResponse
 
-	err := app.db.View(func(txn *badger.Txn) error {
+	err := app.badgerDB.View(func(txn *badger.Txn) error {
 		// Get transaction details
 		txKey := append([]byte("tx:"), txID...)
 		item, err := txn.Get(txKey)
@@ -265,11 +269,11 @@ func (app *DeWSApplication) ProcessProposal(
 			return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, nil
 		}
 		isNotOrigin := dewsTx.OriginNodeID != app.nodeID
-		app.logger.Info("Prepare Proposal", "Tx Origin", dewsTx.OriginNodeID, "ID", app.nodeID)
+		app.logger.Info("Process Proposal", "Tx Origin", dewsTx.OriginNodeID, "ID", app.nodeID)
 		if isNotOrigin {
-			app.logger.Info("Prepare Proposal", "Tx Origin", "false")
+			app.logger.Info("Process Proposal", "Is the proposer?", "false")
 		} else {
-			app.logger.Info("Prepare Proposal", "Tx Origin", "true")
+			app.logger.Info("Process Proposal", "Is the proposer?", "true")
 		}
 
 		// Check if this node is the origin or if we need to replicate
@@ -307,7 +311,7 @@ func (app *DeWSApplication) FinalizeBlock(
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	app.onGoingBlock = app.db.NewTransaction(true)
+	app.onGoingBlock = app.badgerDB.NewTransaction(true)
 
 	for i, txBytes := range req.Txs {
 		var tx service_registry.DeWSTransaction
@@ -329,30 +333,36 @@ func (app *DeWSApplication) FinalizeBlock(
 			// This is our transaction, no need to replicate
 			result = app.storeTransaction(txID, &tx, "accepted", txBytes)
 		} else {
-			// This is a transaction from another node, we need to verify
-			resp, err := tx.Request.GenerateResponse(app.serviceRegistry)
-			if err != nil {
-				result = &abcitypes.ExecTxResult{
-					Code: 1,
-					Log:  fmt.Sprintf("Error executing request: %v", err),
-				}
+			// This is a transaction from another node
+			// Instead of re-executing, just verify the record exists
 
-				// Still store the transaction but mark it as failed
-				app.storeTransaction(txID, &tx, "failed", txBytes)
+			// Extract user email from request body for verification
+			var userData map[string]interface{}
+			err := json.Unmarshal([]byte(tx.Request.Body), &userData)
+
+			if err != nil || tx.Request.Path != "/api/customers" || tx.Request.Method != "POST" {
+				// If we can't parse the body or it's not a user creation request,
+				// fall back to accepting the transaction as is
+				result = app.storeTransaction(txID, &tx, "accepted", txBytes)
 			} else {
-				// Compare our response with the one in the transaction
-				if compareResponses(resp, &tx.Response) {
-					// Responses match, transaction is valid
+				// For user creation, verify the record exists in DB
+				email, ok := userData["email"].(string)
+				if !ok || email == "" {
+					// Cannot verify, accept transaction
 					result = app.storeTransaction(txID, &tx, "accepted", txBytes)
 				} else {
-					// Byzantine behavior detected
-					result = &abcitypes.ExecTxResult{
-						Code: 2,
-						Log:  "Byzantine behavior detected: responses don't match",
-					}
+					// Check if user with this email exists
+					var count int64
+					dbErr := app.postgresDB.Model(&models.User{}).Where("email = ?", email).Count(&count).Error
 
-					// Store the transaction as byzantine
-					app.storeTransaction(txID, &tx, "byzantine", txBytes)
+					if dbErr != nil || count == 0 {
+						// User doesn't exist, which is unexpected
+						app.logger.Info("User verification failed", "email", email, "error", dbErr)
+						result = app.storeTransaction(txID, &tx, "verification_failed", txBytes)
+					} else {
+						// User exists, which means the transaction was processed correctly
+						result = app.storeTransaction(txID, &tx, "accepted", txBytes)
+					}
 				}
 			}
 		}
@@ -380,7 +390,7 @@ func (app *DeWSApplication) FinalizeBlock(
 	return &abcitypes.FinalizeBlockResponse{
 		TxResults: txResults,
 		AppHash:   appHash,
-	}, nil
+	}, err
 }
 
 // Commit implements the ABCI Commit method

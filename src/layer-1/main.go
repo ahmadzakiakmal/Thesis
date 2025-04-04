@@ -32,13 +32,16 @@ var (
 	homeDir      string
 	httpPort     string
 	postgresHost string
-	DB           *gorm.DB
+	PostgresDB   *gorm.DB
+	isByzantine  bool
 )
 
 func init() {
 	flag.StringVar(&homeDir, "cmt-home", "", "Path to the CometBFT config directory")
 	flag.StringVar(&httpPort, "http-port", "5000", "HTTP web server port")
 	flag.StringVar(&postgresHost, "postgres-host", "postgres-node0:5432", "DB address")
+	// TODO: option to turn the node into a Byzantine Node
+	flag.BoolVar(&isByzantine, "byzantine", false, "Byzantine Option")
 }
 
 func main() {
@@ -75,10 +78,6 @@ func main() {
 		}
 	}()
 
-	//? Initialize Service Registry
-	serviceRegistry := service_registry.NewServiceRegistry(DB)
-	serviceRegistry.RegisterDefaultServices()
-
 	//? Create DeWS Application
 	dewsConfig := &app.DeWSConfig{
 		NodeID:        filepath.Base(homeDir), // Use directory name as node ID
@@ -87,7 +86,11 @@ func main() {
 	}
 	logger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
 
-	app := app.NewDeWSApplication(db, serviceRegistry, dewsConfig, logger)
+	//? Initialize Service Registry
+	serviceRegistry := service_registry.NewServiceRegistry(PostgresDB, logger)
+	serviceRegistry.RegisterDefaultServices()
+
+	app := app.NewDeWSApplication(db, serviceRegistry, dewsConfig, logger, PostgresDB)
 
 	//? Private Validator
 	pv := privval.LoadFilePV(
@@ -133,7 +136,7 @@ func main() {
 	}()
 
 	//? Start DeWS Web Server
-	webserver, err := server.NewDeWSWebServer(app, httpPort, logger, node, serviceRegistry, DB)
+	webserver, err := server.NewDeWSWebServer(app, httpPort, logger, node, serviceRegistry, PostgresDB)
 	if err != nil {
 		log.Fatalf("Creating web server: %v", err)
 	}
@@ -165,9 +168,9 @@ func ConnectDB() {
 	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/dewsdb", postgresHost)
 	log.Printf("Connecting to: %s\n", dsn)
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 10; i++ {
 		log.Printf("Connection attempt %d...\n", i+1)
-		DB, err = gorm.Open(postgres.Open(dsn))
+		PostgresDB, err = gorm.Open(postgres.Open(dsn))
 		if err != nil {
 			log.Printf("Connection attempt %d, failed: %v\n", i+1, err)
 			time.Sleep(2 * time.Second)
@@ -179,7 +182,7 @@ func ConnectDB() {
 	if err != nil {
 		log.Fatal("Connection to db failed: ", err.Error())
 	}
-	DB.AutoMigrate(&models.User{})
+	PostgresDB.AutoMigrate(&models.User{})
 
 	log.Print("Connected to DB")
 }

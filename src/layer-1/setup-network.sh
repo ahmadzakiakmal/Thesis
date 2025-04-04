@@ -201,9 +201,10 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
       - "$p2p_port:$p2p_port"
       - "$rpc_port:$rpc_port"
     volumes:
+      - ./build/bin:/app/bin
       - $BASE_DIR/node$i:/root/.cometbft
     command: >
-      sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:5432"
+        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:5432"
     networks:
       - dews-network
   postgres-node$i:

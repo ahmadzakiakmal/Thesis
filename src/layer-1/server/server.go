@@ -338,6 +338,13 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	consensusTime := time.Since(consensusStart)
 	server.logger.Info("Consensus time", "duration", consensusTime)
 
+	// if tendermintResponse.CheckTx.Code != 0 {
+	// 	code := strconv.Itoa(int(tendermintResponse.CheckTx.Code))
+	// 	http.Error(w, "Consensus error with code "+code+": "+err.Error(), http.StatusInternalServerError)
+	// 	server.logger.Error("Failed to broadcast transaction", "err", err)
+	// 	return
+	// }
+
 	if err != nil {
 		http.Error(w, "Consensus error: "+err.Error(), http.StatusInternalServerError)
 		server.logger.Error("Failed to broadcast transaction", "err", err)

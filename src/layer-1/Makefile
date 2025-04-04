@@ -40,6 +40,15 @@ docker-clean:
 	@echo "Cleaning docker environment..."
 	@docker-compose -p layer-1 down -v
 
+fast-dev: docker-clean
+	@echo "Building static binary..."
+	@CGO_ENABLED=0 go build -o ./build/bin .
+	@if [ -d node-config ]; then sudo rm -rf node-config; fi
+	@echo "Generating compose and config for $(NODES) nodes"
+	./setup-network.sh -n $(NODES)
+	@echo "Starting containers with locally built binary..."
+	@docker-compose up -d
+
 run-dev-docker: build-docker-image
 	@echo "Generating compose and node config for 1 node"
 	@if [ -d node-config ]; then sudo rm -rf node-config; fi
