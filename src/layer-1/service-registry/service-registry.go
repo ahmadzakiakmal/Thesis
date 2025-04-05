@@ -69,6 +69,7 @@ type ServiceRegistry struct {
 	mu          sync.RWMutex
 	database    *gorm.DB
 	logger      cmtlog.Logger
+	isByzantine bool
 }
 
 // SerializeToBytes converts the transaction to a byte array for blockchain storage
@@ -116,12 +117,13 @@ func ConvertHTTPRequestToDeWSRequest(r *http.Request, requestID string) (*DeWSRe
 }
 
 // NewServiceRegistry creates a new service registry
-func NewServiceRegistry(db *gorm.DB, logger cmtlog.Logger) *ServiceRegistry {
+func NewServiceRegistry(db *gorm.DB, logger cmtlog.Logger, isByzantine bool) *ServiceRegistry {
 	return &ServiceRegistry{
 		handlers:    make(map[RouteKey]ServiceHandler),
 		exactRoutes: make(map[RouteKey]bool),
 		database:    db,
 		logger:      logger,
+		isByzantine: isByzantine,
 	}
 }
 
@@ -281,5 +283,15 @@ func (req *DeWSRequest) GenerateResponse(services *ServiceRegistry) (*DeWSRespon
 	}
 
 	// Execute the handler
-	return handler(req)
+	response, err := handler(req)
+
+	if services.isByzantine {
+		if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated {
+			response.Body = `{"message": "Byzantiner node response - data corrupted"}`
+			response.StatusCode = http.StatusInternalServerError
+		}
+		services.logger.Info("Byzantine Node Response", response.Body)
+	}
+
+	return response, err
 }

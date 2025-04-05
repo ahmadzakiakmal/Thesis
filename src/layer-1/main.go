@@ -40,13 +40,18 @@ func init() {
 	flag.StringVar(&homeDir, "cmt-home", "", "Path to the CometBFT config directory")
 	flag.StringVar(&httpPort, "http-port", "5000", "HTTP web server port")
 	flag.StringVar(&postgresHost, "postgres-host", "postgres-node0:5432", "DB address")
-	// TODO: option to turn the node into a Byzantine Node
 	flag.BoolVar(&isByzantine, "byzantine", false, "Byzantine Option")
 }
 
 func main() {
 	//? Load Config
 	flag.Parse()
+
+	log.Println(isByzantine)
+	if isByzantine {
+		log.Println("Starting node as a byzantine node...")
+	}
+
 	if homeDir == "" {
 		homeDir = os.ExpandEnv("$HOME/.cometbft")
 	}
@@ -87,7 +92,7 @@ func main() {
 	logger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
 
 	//? Initialize Service Registry
-	serviceRegistry := service_registry.NewServiceRegistry(PostgresDB, logger)
+	serviceRegistry := service_registry.NewServiceRegistry(PostgresDB, logger, isByzantine)
 	serviceRegistry.RegisterDefaultServices()
 
 	app := app.NewDeWSApplication(db, serviceRegistry, dewsConfig, logger, PostgresDB)

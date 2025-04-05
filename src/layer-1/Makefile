@@ -15,7 +15,7 @@ DEV ?= true
 build-bin:
 	@echo "Building binary..."
 	@mkdir -p ./build
-	@go build -o ./build/bin
+	@CGO_ENABLED=0 go build -o ./build/bin
 
 run-dev-local: build-bin
 	@echo "Running 1 node with no empty block creation for dev..."
@@ -74,3 +74,6 @@ endif
 	@echo "Composing network..."
 	@docker-compose up -d
 
+setup:
+	@echo "Generating network config for $(NODES) nodes..."
+	@./setup-network.sh in $(NODES)
