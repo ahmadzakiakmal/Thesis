@@ -11,7 +11,7 @@
     T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 \begin{document}
 
-\title{Paper Title}
+\title{High Throughput, Byzantine Fault-Tolerant Web Services Using Layer 2 Blockchain}
 
 \author{\IEEEauthorblockN{1\textsuperscript{st} Given Name Surname}
 \IEEEauthorblockA{\textit{dept. name of organization (of Aff.)} \\
@@ -30,36 +30,36 @@ email address or ORCID}
 \textit{name of organization (of Aff.)}\\
 City, Country \\
 email address or ORCID}
-\and
-\IEEEauthorblockN{4\textsuperscript{th} Given Name Surname}
-\IEEEauthorblockA{\textit{dept. name of organization (of Aff.)} \\
-\textit{name of organization (of Aff.)}\\
-City, Country \\
-email address or ORCID}
-\and
-\IEEEauthorblockN{5\textsuperscript{th} Given Name Surname}
-\IEEEauthorblockA{\textit{dept. name of organization (of Aff.)} \\
-\textit{name of organization (of Aff.)}\\
-City, Country \\
-email address or ORCID}
-\and
-\IEEEauthorblockN{6\textsuperscript{th} Given Name Surname}
-\IEEEauthorblockA{\textit{dept. name of organization (of Aff.)} \\
-\textit{name of organization (of Aff.)}\\
-City, Country \\
-email address or ORCID}
 }
 
 \maketitle
 
 \begin{abstract}
-This document is a model and instructions for \LaTeX.
-This and the IEEEtran.cls file define the components of your paper [title, text, heads, etc.]. *CRITICAL: Do Not Use Symbols, Special Characters, Footnotes, 
-or Math in Paper Title or Abstract.
+Blockchain technology has gained significant attention in recent years due to its potentials.
+However, it is still trying to find its way into a wider range of applications.
+One of the most promising benefit of blockchain is its ability to offer fault-tolerance,
+where this aspect seems to be underexplored, especially in web services.
+Previous works like Decentralized and Byzantine Fault-tolerant Web Services (DeWS),
+have shown that web services can be made fault-tolerant using blockchain.
+But the scalability issues of the blockchain and the high latency of the consensus algorithms
+caused the system to have a limited scalability and throughput.
+This research explores scaling solutions for Decentralized and Byzantine Fault-tolerant Web Services (DeWS),
+a framework that enhances traditional web services with transparency, auditability, and Byzantine fault tolerance 
+through blockchain technology. 
+While DeWS successfully replaces the conventional request-compute-response paradigm with a more robust 
+request-compute-consensus-log-response model, its performance is constrained by the inherent latency of 
+Byzantine consensus protocols. Our investigation identifies Rollkit, a Cosmos SDK-compatible sovereign rollup framework, 
+as a promising layer-2 solution for DeWS performance optimization. Initial testing demonstrates significant throughput 
+improvements, achieving approximately double the transaction capacity compared to a standard 4-node system under 
+100-200 concurrent requests. This research proposes a two-layer architecture that maintains DeWS's security 
+guarantees while addressing its performance limitations, enabling wider adoption for mission-critical and safety-critical 
+applications where both fault tolerance and responsiveness are essential. Our implementation with Tendermint/CometBFT 
+demonstrates that decentralized web services can achieve reasonable performance while preserving the integrity 
+assurances required for multi-stakeholder environments.
 \end{abstract}
 
 \begin{IEEEkeywords}
-component, formatting, style, styling, insert
+blockchain, web services, Byzantine fault tolerance, scalability, rollup
 \end{IEEEkeywords}
 
 \section{Introduction}
