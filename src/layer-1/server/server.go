@@ -58,9 +58,10 @@ type ResponseInfo struct {
 
 // ConsensusInfo contains information about the consensus process
 type ConsensusInfo struct {
-	TotalNodes     int    `json:"total_nodes"`
-	AgreementNodes int    `json:"agreement_nodes"`
-	NodeResponses  []bool `json:"node_responses,omitempty"`
+	TotalNodes     int           `json:"total_nodes"`
+	AgreementNodes int           `json:"agreement_nodes"`
+	NodeResponses  []bool        `json:"node_responses,omitempty"`
+	Votes          []interface{} `json:"votes"`
 }
 
 // ClientResponse is the response format sent to clients
@@ -68,6 +69,7 @@ type ClientResponse struct {
 	StatusCode    int               `json:"-"` // Not included in JSON
 	Headers       map[string]string `json:"-"` // Not included in JSON
 	Body          string            `json:"body,omitempty"`
+	BodyCustom    interface{}       `json:"body_custom"`
 	Meta          TransactionStatus `json:"meta"`
 	BlockchainRef string            `json:"blockchain_ref"`
 	NodeID        string            `json:"node_id"`
@@ -338,12 +340,12 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	consensusTime := time.Since(consensusStart)
 	server.logger.Info("Consensus time", "duration", consensusTime)
 
-	// if tendermintResponse.CheckTx.Code != 0 {
-	// 	code := strconv.Itoa(int(tendermintResponse.CheckTx.Code))
-	// 	http.Error(w, "Consensus error with code "+code+": "+err.Error(), http.StatusInternalServerError)
-	// 	server.logger.Error("Failed to broadcast transaction", "err", err)
-	// 	return
-	// }
+	if tendermintResponse.CheckTx.GetCode() != 0 {
+		code := strconv.Itoa(int(tendermintResponse.CheckTx.Code))
+		http.Error(w, "Consensus error with code "+code+": "+err.Error(), http.StatusInternalServerError)
+		server.logger.Error("Failed to broadcast transaction", "err", err)
+		return
+	}
 
 	if err != nil {
 		http.Error(w, "Consensus error: "+err.Error(), http.StatusInternalServerError)
@@ -360,6 +362,7 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 		StatusCode: dewsResponse.StatusCode,
 		Headers:    dewsResponse.Headers,
 		Body:       dewsResponse.Body,
+		BodyCustom: dewsResponse.BodyCustom,
 		Meta: TransactionStatus{
 			TxID:        hex.EncodeToString(tendermintResponse.Hash),
 			RequestID:   requestID,
@@ -459,6 +462,12 @@ func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionSt
 		return nil, fmt.Errorf("error searching for transaction: %w", err)
 	}
 
+	consensusInfo := ConsensusInfo{
+		TotalNodes:     server.countPeers() + 1, // +1 for this node
+		AgreementNodes: 0,                       // We'll calculate this
+		NodeResponses:  make([]bool, 0),         // Track individual node responses
+	}
+
 	if len(res.Txs) == 0 {
 		return nil, nil // Transaction not found
 	}
@@ -475,6 +484,11 @@ func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionSt
 	// Extract events
 	status := "pending"
 	for _, event := range tx.TxResult.Events {
+		server.logger.Info("=== EVENT ===", event.Type, event)
+		if event.Type == "tm.event.Vote" || event.Type == "vote" {
+			consensusInfo.AgreementNodes++
+			consensusInfo.NodeResponses = append(consensusInfo.NodeResponses, true)
+		}
 		if event.Type == "dews_tx" {
 			for _, attr := range event.Attributes {
 				if string(attr.Key) == "status" {
@@ -489,12 +503,6 @@ func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionSt
 		StatusCode:  dewsTx.Response.StatusCode,
 		ContentType: dewsTx.Response.Headers["Content-Type"],
 		BodyLength:  len(dewsTx.Response.Body),
-	}
-
-	// Create consensus info (in a real system, this would be more detailed)
-	consensusInfo := ConsensusInfo{
-		TotalNodes:     server.countPeers() + 1, // +1 for this node
-		AgreementNodes: 1,                       // Simplified for now
 	}
 
 	// Create transaction status

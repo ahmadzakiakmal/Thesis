@@ -38,7 +38,7 @@ services:
       - ./build/bin:/app/bin
       - ./node-config/node1:/root/.cometbft
     command: >
-        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5001 --postgres-host=postgres-node1:5432 --byzantine true"
+        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5001 --postgres-host=postgres-node1:5432"
     networks:
       - dews-network
   postgres-node1:

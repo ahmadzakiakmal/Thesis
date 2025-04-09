@@ -32,6 +32,7 @@ type DeWSResponse struct {
 	Headers    map[string]string `json:"headers"`
 	Body       string            `json:"body"`
 	Error      string            `json:"error,omitempty"`
+	BodyCustom interface{}       `json:"body_custom"`
 }
 
 // DeWSTransaction represents a complete DeWS transaction
@@ -255,12 +256,13 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 				StatusCode: http.StatusInternalServerError,
 				Headers:    map[string]string{"Content-Type": "application/json"},
 				Body:       `{"error":"failed to marshal response"}`,
-			}, nil
+			}, err
 		}
 		return &DeWSResponse{
 			StatusCode: http.StatusOK,
 			Headers:    map[string]string{"Content-Type": "application/json"},
 			Body:       string(jsonBytes),
+			BodyCustom: customers,
 		}, nil
 	})
 
