@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Define paths
-SEQ_DIR="$HOME/go/src/github.com/thesis-prototype/layer-2/sequencer"
+SEQ_DIR="$PWD/node-config"
 
 # Define the chain ID
-export CHAIN_ID="gm"
+export CHAIN_ID="dews"
 
 # Start the sequencer node
 cd $SEQ_DIR
