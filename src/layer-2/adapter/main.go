@@ -1,18 +1,71 @@
 package main
 
 import (
-	"encoding/binary"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
-	"sync/atomic"
+	"net/url"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
 )
 
-// Simple in-memory block storage
-var currentHeight uint64 = 0
-var blobs = make(map[uint64][][]byte)
+// Configuration options
+var (
+	listenAddr     = flag.String("listen", ":7980", "Address to listen on for Layer 2 requests")
+	layer1Endpoint = flag.String("layer1", "http://localhost:5000", "Layer 1 API endpoint")
+	daMode         = flag.String("da-mode", "mock", "Data availability mode: 'mock' or 'celestia'")
+	nodeID         = flag.String("node-id", "l2-adapter-node", "Node ID for this adapter")
+	logLevel       = flag.String("log-level", "info", "Log level: debug, info, warn, error")
+	batchInterval  = flag.Duration("batch-interval", 5*time.Second, "Time interval for batching transactions")
+	batchSize      = flag.Int("batch-size", 100, "Maximum number of transactions in a batch")
+)
+
+// Transaction represents a transaction in the system
+type Transaction struct {
+	ID        string          `json:"id"`
+	Request   json.RawMessage `json:"request"`
+	Response  json.RawMessage `json:"response,omitempty"`
+	Status    string          `json:"status"`
+	Timestamp time.Time       `json:"timestamp"`
+	BlockID   uint64          `json:"block_id,omitempty"`
+}
+
+// Layer 1 compatible structures
+type DeWSRequest struct {
+	Method     string            `json:"method"`
+	Path       string            `json:"path"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body"`
+	RemoteAddr string            `json:"remote_addr"`
+	RequestID  string            `json:"request_id"`
+	Timestamp  time.Time         `json:"timestamp"`
+}
+
+type DeWSResponse struct {
+	StatusCode int               `json:"status_code"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body"`
+	Error      string            `json:"error,omitempty"`
+	BodyCustom interface{}       `json:"body_custom"`
+}
+
+type DeWSTransaction struct {
+	Request      DeWSRequest  `json:"request"`
+	Response     DeWSResponse `json:"response"`
+	OriginNodeID string       `json:"origin_node_id"`
+	BlockHeight  int64        `json:"block_height,omitempty"`
+}
 
 // JSONRPC request structure
 type JSONRPCRequest struct {
@@ -30,287 +83,325 @@ type JSONRPCResponse struct {
 	ID      interface{} `json:"id"`
 }
 
-func main() {
-	// Handle all paths
-	http.HandleFunc("/", handleRequest)
-
-	fmt.Println("Starting mock DA server on :7980")
-	log.Fatal(http.ListenAndServe(":7980", nil))
+// BatchProcessor handles the batching of transactions
+type BatchProcessor struct {
+	transactions      []*Transaction
+	mu                sync.Mutex
+	batchInterval     time.Duration
+	batchSize         int
+	lastBatchTime     time.Time
+	layer1Endpoint    string
+	currentBlockID    uint64
+	processingBatch   bool
+	processingBatchMu sync.Mutex
 }
 
-func handleRequest(w http.ResponseWriter, r *http.Request) {
-	// Log all requests
-	fmt.Printf("Received %s request to %s\n", r.Method, r.URL.Path)
+// TransactionStore is a simple in-memory store for transactions
+type TransactionStore struct {
+	transactions map[string]*Transaction
+	mu           sync.RWMutex
+}
 
-	if r.Method == "POST" {
-		// Read the request body
-		body, err := ioutil.ReadAll(r.Body)
+// Global variables
+var (
+	processor *BatchProcessor
+	txStore   *TransactionStore
+	logger    *log.Logger
+)
+
+func main() {
+	flag.Parse()
+
+	// Initialize logger
+	logger = log.New(os.Stdout, "L2-ADAPTER: ", log.LstdFlags|log.Lshortfile)
+	logger.Printf("Starting DeWS Layer 2 Adapter on %s", *listenAddr)
+	logger.Printf("Layer 1 endpoint: %s", *layer1Endpoint)
+	logger.Printf("Data availability mode: %s", *daMode)
+
+	// Initialize transaction store
+	txStore = &TransactionStore{
+		transactions: make(map[string]*Transaction),
+	}
+
+	// Initialize batch processor
+	processor = &BatchProcessor{
+		transactions:   make([]*Transaction, 0),
+		batchInterval:  *batchInterval,
+		batchSize:      *batchSize,
+		lastBatchTime:  time.Now(),
+		layer1Endpoint: *layer1Endpoint,
+		currentBlockID: 1, // Start from block 1
+	}
+
+	// Start the batch processor
+	go processor.processBatches()
+
+	// Set up HTTP server with routing
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", handleRoot)
+	mux.HandleFunc("/tx", handleTransaction)
+	mux.HandleFunc("/status/", handleStatus)
+	mux.HandleFunc("/batch", handleBatch)
+
+	server := &http.Server{
+		Addr:    *listenAddr,
+		Handler: mux,
+	}
+
+	// Start the server
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Handle graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Println("Shutting down server...")
+
+	// Process any remaining transactions
+	processor.processBatchNow()
+
+	// Graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		logger.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	logger.Println("Server exited properly")
+}
+
+// handleRoot handles the root endpoint
+func handleRoot(w http.ResponseWriter, r *http.Request) {
+	// Special case for JSONRPC requests
+	if r.Method == "POST" && strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "Error reading request body", http.StatusInternalServerError)
 			return
 		}
 
-		fmt.Printf("Request body: %s\n", string(body))
+		// Restore body for further processing
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
 
 		// Try to parse as JSONRPC
 		var req JSONRPCRequest
 		if err := json.Unmarshal(body, &req); err == nil && req.Method != "" {
-			handleJSONRPC(w, req)
+			handleJSONRPC(w, req, body)
 			return
 		}
-
-		// If not JSONRPC, handle as a simple POST request
-		// Always return success for any POST request
-		fmt.Println("Handling as simple POST request")
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"result": "success"}`))
-	} else if r.Method == "GET" {
-		// Handle GET requests
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Fake DA Server is running"))
-	} else {
-		// Return 200 OK for all request methods to avoid compatibility issues
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"result": "success"}`))
 	}
-}
 
-func handleJSONRPC(w http.ResponseWriter, req JSONRPCRequest) {
-	fmt.Printf("Handling JSONRPC request: Method=%s, ID=%v\n", req.Method, req.ID)
-	fmt.Printf("Params: %s\n", string(req.Params))
-
-	// Handle request based on method
-	switch req.Method {
-	case "da.MaxBlobSize":
-		// Return a uint64 value directly, not an array
-		maxBlobSize := uint64(1024 * 1024) // 1MB
-		sendSuccessResponse(w, req.ID, maxBlobSize)
-
-	case "da.Submit":
-		// For da.Submit, try different parameter formats
-		// First, try parsing as array of arrays (blobs)
-		var blobsArray [][]byte
-		if err := json.Unmarshal(req.Params, &blobsArray); err == nil {
-			fmt.Printf("Successfully parsed params as blob array, received %d blobs\n", len(blobsArray))
-
-			// Increment height for new blocks
-			newHeight := atomic.AddUint64(&currentHeight, 1)
-
-			// Store blobs for this height
-			blobs[newHeight] = blobsArray
-
-			// Create an ID for each blob (using height as ID)
-			var ids [][]byte
-			idBytes := make([]byte, 8)
-			binary.LittleEndian.PutUint64(idBytes, newHeight)
-			ids = append(ids, idBytes)
-
-			// Return the IDs
-			sendSuccessResponse(w, req.ID, ids)
-			return
-		}
-
-		// If that fails, try parsing as struct with Blobs field
-		var paramsStruct struct {
-			Blobs     [][]byte `json:"blobs"`
-			GasPrice  float64  `json:"gas_price"`
-			Namespace string   `json:"namespace"`
-		}
-		if err := json.Unmarshal(req.Params, &paramsStruct); err == nil {
-			fmt.Printf("Successfully parsed params as struct, received %d blobs\n", len(paramsStruct.Blobs))
-
-			// Increment height for new blocks
-			newHeight := atomic.AddUint64(&currentHeight, 1)
-
-			// Store blobs for this height
-			blobs[newHeight] = paramsStruct.Blobs
-
-			// Create an ID for each blob (using height as ID)
-			var ids [][]byte
-			idBytes := make([]byte, 8)
-			binary.LittleEndian.PutUint64(idBytes, newHeight)
-			ids = append(ids, idBytes)
-
-			// Return the IDs
-			sendSuccessResponse(w, req.ID, ids)
-			return
-		}
-
-		// If both fail, try a different approach - assume it's an array of parameters
-		var params []interface{}
-		if err := json.Unmarshal(req.Params, &params); err == nil {
-			fmt.Printf("Successfully parsed params as array of parameters, length: %d\n", len(params))
-
-			// Try to extract blobs from first parameter
-			var blobsData [][]byte
-			if len(params) > 0 {
-				// Convert first parameter to JSON
-				blobsJSON, err := json.Marshal(params[0])
-				if err == nil {
-					if err := json.Unmarshal(blobsJSON, &blobsData); err == nil {
-						fmt.Printf("Successfully extracted %d blobs from first parameter\n", len(blobsData))
-
-						// Increment height for new blocks
-						newHeight := atomic.AddUint64(&currentHeight, 1)
-
-						// Store blobs for this height
-						blobs[newHeight] = blobsData
-
-						// Create an ID for each blob (using height as ID)
-						var ids [][]byte
-						idBytes := make([]byte, 8)
-						binary.LittleEndian.PutUint64(idBytes, newHeight)
-						ids = append(ids, idBytes)
-
-						// Return the IDs
-						sendSuccessResponse(w, req.ID, ids)
-						return
-					}
-				}
-			}
-		}
-
-		// If all parsing attempts fail, log the issue and return a simple response
-		fmt.Printf("Failed to parse params for da.Submit: %s\n", string(req.Params))
-		// Just increment height and return a valid ID
-		newHeight := atomic.AddUint64(&currentHeight, 1)
-		idBytes := make([]byte, 8)
-		binary.LittleEndian.PutUint64(idBytes, newHeight)
-		sendSuccessResponse(w, req.ID, [][]byte{idBytes})
-
-	case "status":
-		result := map[string]interface{}{
-			"node_info": map[string]interface{}{
-				"network": "test-network",
-			},
-			"sync_info": map[string]interface{}{
-				"latest_block_height": currentHeight,
-			},
-		}
-		sendSuccessResponse(w, req.ID, result)
-
-	case "da.GetIDs":
-		// Parse the params to get height
-		var height uint64
-		if err := json.Unmarshal(req.Params, &height); err == nil {
-			// Simple uint64 parameter
-			fmt.Printf("Parsed height directly: %d\n", height)
-			handleGetIDs(w, req.ID, height)
-			return
-		}
-
-		// Try array of parameters
-		var params []interface{}
-		if err := json.Unmarshal(req.Params, &params); err == nil && len(params) > 0 {
-			// Try to extract height from first parameter
-			if heightFloat, ok := params[0].(float64); ok {
-				fmt.Printf("Extracted height from array: %f\n", heightFloat)
-				handleGetIDs(w, req.ID, uint64(heightFloat))
-				return
-			}
-		}
-
-		// Try struct with Height field
-		var paramsStruct struct {
-			Height    uint64 `json:"height"`
-			Namespace string `json:"namespace"`
-		}
-		if err := json.Unmarshal(req.Params, &paramsStruct); err == nil {
-			fmt.Printf("Parsed height from struct: %d\n", paramsStruct.Height)
-			handleGetIDs(w, req.ID, paramsStruct.Height)
-			return
-		}
-
-		// If all parsing attempts fail, log the issue and return empty IDs
-		fmt.Printf("Failed to parse params for da.GetIDs: %s\n", string(req.Params))
-		sendSuccessResponse(w, req.ID, map[string]interface{}{
-			"ids": []string{},
-		})
-
-	case "da.Get":
-		// Similar approach for da.Get
-		var ids [][]byte
-		if err := json.Unmarshal(req.Params, &ids); err == nil {
-			fmt.Printf("Successfully parsed params as ID array, received %d IDs\n", len(ids))
-			handleGet(w, req.ID, ids)
-			return
-		}
-
-		// Try array of parameters
-		var params []interface{}
-		if err := json.Unmarshal(req.Params, &params); err == nil && len(params) > 0 {
-			// Try to extract IDs from first parameter
-			idsJSON, err := json.Marshal(params[0])
-			if err == nil {
-				if err := json.Unmarshal(idsJSON, &ids); err == nil {
-					fmt.Printf("Successfully extracted %d IDs from first parameter\n", len(ids))
-					handleGet(w, req.ID, ids)
-					return
-				}
-			}
-		}
-
-		// Try struct with IDs field
-		var paramsStruct struct {
-			IDs       [][]byte `json:"ids"`
-			Namespace string   `json:"namespace"`
-		}
-		if err := json.Unmarshal(req.Params, &paramsStruct); err == nil {
-			fmt.Printf("Successfully parsed params as struct, received %d IDs\n", len(paramsStruct.IDs))
-			handleGet(w, req.ID, paramsStruct.IDs)
-			return
-		}
-
-		// If all parsing attempts fail, log the issue and return empty blobs
-		fmt.Printf("Failed to parse params for da.Get: %s\n", string(req.Params))
-		sendSuccessResponse(w, req.ID, [][]byte{})
-
-	default:
-		// For unknown methods, log and return a simple response
-		fmt.Printf("Unknown method: %s\n", req.Method)
-		sendSuccessResponse(w, req.ID, 0)
-	}
-}
-
-func handleGetIDs(w http.ResponseWriter, id interface{}, height uint64) {
-	// Check if we have blobs for this height
-	if _, ok := blobs[height]; !ok {
-		// No blocks at this height
-		sendSuccessResponse(w, id, map[string]interface{}{
-			"ids": []string{},
-		})
+	// Default handler for non-JSONRPC requests
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
 		return
 	}
 
-	// Create IDs for the blobs
-	var ids [][]byte
-	idBytes := make([]byte, 8)
-	binary.LittleEndian.PutUint64(idBytes, height)
-	ids = append(ids, idBytes)
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, "<h1>DeWS Layer 2 Adapter</h1>")
+	fmt.Fprintf(w, "<p>Node ID: %s</p>", *nodeID)
+	fmt.Fprintf(w, "<p>Layer 1 Endpoint: %s</p>", *layer1Endpoint)
+	fmt.Fprintf(w, "<p>Current batch size: %d transactions</p>", len(processor.transactions))
+	fmt.Fprintf(w, "<p>Current block ID: %d</p>", processor.currentBlockID)
+}
 
-	// Return the IDs
-	sendSuccessResponse(w, id, map[string]interface{}{
-		"ids": ids,
+// handleTransaction handles transaction submissions
+func handleTransaction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Read the request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Error reading request body", http.StatusInternalServerError)
+		return
+	}
+
+	// Parse the transaction
+	var tx Transaction
+	if err := json.Unmarshal(body, &tx); err != nil {
+		http.Error(w, "Invalid transaction format", http.StatusBadRequest)
+		return
+	}
+
+	// Generate a transaction ID if not provided
+	if tx.ID == "" {
+		tx.ID = generateTxID()
+	}
+
+	// Set timestamp if not provided
+	if tx.Timestamp.IsZero() {
+		tx.Timestamp = time.Now()
+	}
+
+	// Set status to "pending"
+	tx.Status = "pending"
+
+	// Store the transaction
+	txStore.add(&tx)
+
+	// Add to batch processor
+	processor.addTransaction(&tx)
+
+	// Return the transaction ID
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"id":     tx.ID,
+		"status": tx.Status,
 	})
 }
 
-func handleGet(w http.ResponseWriter, id interface{}, ids [][]byte) {
-	// Return blobs for the requested IDs
-	var retrievedBlobs [][]byte
-	for _, idBytes := range ids {
-		if len(idBytes) >= 8 {
-			height := binary.LittleEndian.Uint64(idBytes)
-			if heightBlobs, ok := blobs[height]; ok {
-				retrievedBlobs = append(retrievedBlobs, heightBlobs...)
-			}
-		}
+// handleStatus checks the status of a transaction
+func handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	// Return the blobs
-	sendSuccessResponse(w, id, retrievedBlobs)
+	// Extract transaction ID from URL
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) != 3 || parts[1] != "status" {
+		http.Error(w, "Invalid request format", http.StatusBadRequest)
+		return
+	}
+
+	txID := parts[2]
+	tx := txStore.get(txID)
+	if tx == nil {
+		http.Error(w, "Transaction not found", http.StatusNotFound)
+		return
+	}
+
+	// Return the transaction status
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tx)
 }
 
-func sendSuccessResponse(w http.ResponseWriter, id interface{}, result interface{}) {
+// handleBatch handles batch operations
+func handleBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Process the current batch
+	processor.processBatchNow()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "Batch processing initiated",
+	})
+}
+
+// handleJSONRPC handles JSONRPC requests
+func handleJSONRPC(w http.ResponseWriter, req JSONRPCRequest, rawBody []byte) {
+	logger.Printf("Handling JSONRPC: %s", req.Method)
+
+	// Handle different methods
+	switch req.Method {
+	case "da.MaxBlobSize":
+		// Return maximum blob size
+		sendJSONRPCResponse(w, req.ID, 1024*1024) // 1MB
+
+	case "da.Submit":
+		// Handle DA submit - we assume the params contain transaction data
+		// For simplicity, let's create a transaction from it
+		tx := &Transaction{
+			ID:        generateTxID(),
+			Request:   rawBody,
+			Status:    "pending",
+			Timestamp: time.Now(),
+		}
+
+		// Store the transaction
+		txStore.add(tx)
+
+		// Add to batch
+		processor.addTransaction(tx)
+
+		// Return the transaction ID as bytes
+		idBytes := []byte(tx.ID)
+		sendJSONRPCResponse(w, req.ID, [][]byte{idBytes})
+
+	case "status":
+		// Return system status
+		status := map[string]interface{}{
+			"node_info": map[string]interface{}{
+				"network": "layer2-rollup",
+				"node_id": *nodeID,
+			},
+			"sync_info": map[string]interface{}{
+				"latest_block_height": processor.currentBlockID,
+			},
+			"batch_info": map[string]interface{}{
+				"current_batch_size": len(processor.transactions),
+				"last_batch_time":    processor.lastBatchTime,
+			},
+		}
+		sendJSONRPCResponse(w, req.ID, status)
+
+	case "da.GetIDs":
+		// Parse the block height from params
+		var height uint64
+		if err := json.Unmarshal(req.Params, &height); err != nil {
+			sendJSONRPCErrorResponse(w, req.ID, -32602, "Invalid params")
+			return
+		}
+
+		// Get all transaction IDs for this block height
+		var ids []string
+		txStore.mu.RLock()
+		for _, tx := range txStore.transactions {
+			if tx.BlockID == height {
+				ids = append(ids, tx.ID)
+			}
+		}
+		txStore.mu.RUnlock()
+
+		// Convert to bytes
+		idBytes := make([][]byte, len(ids))
+		for i, id := range ids {
+			idBytes[i] = []byte(id)
+		}
+
+		sendJSONRPCResponse(w, req.ID, map[string]interface{}{
+			"ids": idBytes,
+		})
+
+	case "da.Get":
+		// Parse the IDs from params
+		var idBytes [][]byte
+		if err := json.Unmarshal(req.Params, &idBytes); err != nil {
+			sendJSONRPCErrorResponse(w, req.ID, -32602, "Invalid params")
+			return
+		}
+
+		// Get transactions for these IDs
+		var txs []json.RawMessage
+		for _, id := range idBytes {
+			tx := txStore.get(string(id))
+			if tx != nil {
+				txs = append(txs, tx.Request)
+			}
+		}
+
+		sendJSONRPCResponse(w, req.ID, txs)
+
+	default:
+		sendJSONRPCErrorResponse(w, req.ID, -32601, "Method not found")
+	}
+}
+
+// sendJSONRPCResponse sends a successful JSONRPC response
+func sendJSONRPCResponse(w http.ResponseWriter, id interface{}, result interface{}) {
 	response := JSONRPCResponse{
 		JSONRPC: "2.0",
 		Result:  result,
@@ -321,7 +412,8 @@ func sendSuccessResponse(w http.ResponseWriter, id interface{}, result interface
 	json.NewEncoder(w).Encode(response)
 }
 
-func sendErrorResponse(w http.ResponseWriter, id interface{}, code int, message string) {
+// sendJSONRPCErrorResponse sends an error JSONRPC response
+func sendJSONRPCErrorResponse(w http.ResponseWriter, id interface{}, code int, message string) {
 	response := JSONRPCResponse{
 		JSONRPC: "2.0",
 		Error: map[string]interface{}{
@@ -332,6 +424,292 @@ func sendErrorResponse(w http.ResponseWriter, id interface{}, code int, message 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK) // Always 200 OK for JSONRPC errors
 	json.NewEncoder(w).Encode(response)
+}
+
+// addTransaction adds a transaction to the batch
+func (p *BatchProcessor) addTransaction(tx *Transaction) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.transactions = append(p.transactions, tx)
+	logger.Printf("Added transaction %s to batch. Current batch size: %d", tx.ID, len(p.transactions))
+
+	// If we've reached the batch size, process immediately
+	if len(p.transactions) >= p.batchSize {
+		go p.processBatchNow()
+	}
+}
+
+// processBatches periodically processes batches
+func (p *BatchProcessor) processBatches() {
+	ticker := time.NewTicker(p.batchInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		p.mu.Lock()
+		if time.Since(p.lastBatchTime) >= p.batchInterval && len(p.transactions) > 0 {
+			p.mu.Unlock()
+			p.processBatchNow()
+		} else {
+			p.mu.Unlock()
+		}
+	}
+}
+
+// processBatchNow processes the current batch immediately
+func (p *BatchProcessor) processBatchNow() {
+	// Use a mutex to ensure only one batch is being processed at a time
+	p.processingBatchMu.Lock()
+	defer p.processingBatchMu.Unlock()
+
+	p.mu.Lock()
+	if len(p.transactions) == 0 {
+		p.mu.Unlock()
+		return
+	}
+
+	// Get the current batch
+	currentBatch := p.transactions
+	p.transactions = make([]*Transaction, 0)
+	p.lastBatchTime = time.Now()
+	blockID := p.currentBlockID
+	p.currentBlockID++
+	p.mu.Unlock()
+
+	logger.Printf("Processing batch of %d transactions for block %d", len(currentBatch), blockID)
+
+	// Convert to Layer 1 format and submit
+	for _, tx := range currentBatch {
+		// Update block ID
+		tx.BlockID = blockID
+
+		// Log the transaction content if it's not empty
+		if tx.Request != nil && len(tx.Request) > 0 {
+			// Print a line of equals to make it easier to find in logs
+			logger.Println("================ TRANSACTION TO LAYER 1 ================")
+
+			// Log transaction ID and block
+			logger.Printf("TX ID: %s, Block ID: %d", tx.ID, blockID)
+
+			// Try to pretty print the JSON body
+			var requestObj interface{}
+			if err := json.Unmarshal(tx.Request, &requestObj); err == nil {
+				prettyJSON, err := json.MarshalIndent(requestObj, "", "  ")
+				if err == nil {
+					logger.Printf("Request (JSON):\n%s", string(prettyJSON))
+				} else {
+					logger.Printf("Request: %s", string(tx.Request))
+				}
+			} else {
+				// If not valid JSON, log as string
+				logger.Printf("Request: %s", string(tx.Request))
+			}
+
+			// Print a closing line
+			logger.Println("================ END TRANSACTION ================")
+		}
+
+		// Convert to Layer 1 format and submit
+		err := p.submitToLayer1(tx)
+		if err != nil {
+			tx.Status = "failed"
+			logger.Printf("Failed to submit transaction %s: %v", tx.ID, err)
+		} else {
+			tx.Status = "confirmed"
+		}
+
+		// Update in store
+		txStore.update(tx)
+	}
+
+	logger.Printf("Batch processing complete for block %d", blockID)
+}
+
+// submitToLayer1 submits a transaction to Layer 1 using the RPC endpoint
+func (p *BatchProcessor) submitToLayer1(tx *Transaction) error {
+	// Parse the raw request
+	var rawRequest map[string]interface{}
+	if err := json.Unmarshal(tx.Request, &rawRequest); err != nil {
+		return fmt.Errorf("invalid request format: %v", err)
+	}
+
+	// Extract needed fields to create DeWSRequest
+	method, _ := rawRequest["method"].(string)
+	path, _ := rawRequest["path"].(string)
+	body, _ := rawRequest["body"].(string)
+
+	// Create DeWSRequest
+	dewsReq := DeWSRequest{
+		Method:     method,
+		Path:       path,
+		Headers:    make(map[string]string),
+		Body:       body,
+		RemoteAddr: "layer2-adapter",
+		RequestID:  tx.ID,
+		Timestamp:  tx.Timestamp,
+	}
+
+	// Add headers if provided
+	if headersMap, ok := rawRequest["headers"].(map[string]interface{}); ok {
+		for k, v := range headersMap {
+			if strValue, ok := v.(string); ok {
+				dewsReq.Headers[k] = strValue
+			}
+		}
+	}
+
+	// Convert to Layer 1 format for submission
+	dewsTransaction := DeWSTransaction{
+		Request:      dewsReq,
+		OriginNodeID: *nodeID,
+	}
+
+	// Serialize the transaction to JSON bytes
+	txData, err := json.Marshal(dewsTransaction)
+	if err != nil {
+		return fmt.Errorf("error serializing transaction: %v", err)
+	}
+
+	// For CometBFT RPC, we need to hex encode the raw bytes
+	encodedTx := hex.EncodeToString(txData)
+
+	// Construct RPC endpoint URL - using port 9001 as specified
+	rpcURL := getRPCEndpoint(p.layer1Endpoint)
+
+	// Create broadcast_tx_sync JSONRPC request
+	rpcRequest := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "broadcast_tx_sync",
+		"params":  []string{encodedTx},
+	}
+
+	rpcRequestJSON, err := json.Marshal(rpcRequest)
+	if err != nil {
+		return fmt.Errorf("error serializing RPC request: %v", err)
+	}
+
+	// Send RPC request
+	logger.Printf("Submitting transaction to Layer 1 RPC endpoint: %s", rpcURL)
+	req, err := http.NewRequest("POST", rpcURL, bytes.NewBuffer(rpcRequestJSON))
+	if err != nil {
+		return fmt.Errorf("error creating RPC request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	// Send request
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending RPC request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("error reading RPC response: %v", err)
+	}
+
+	// Parse the RPC response
+	var rpcResponse struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      int    `json:"id"`
+		Result  struct {
+			Code int    `json:"code"`
+			Data string `json:"data"`
+			Hash string `json:"hash"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(respBody, &rpcResponse); err != nil {
+		return fmt.Errorf("error parsing RPC response: %v", err)
+	}
+
+	// Check for RPC errors
+	if rpcResponse.Error != nil {
+		return fmt.Errorf("RPC error: %s (code %d)", rpcResponse.Error.Message, rpcResponse.Error.Code)
+	}
+
+	// Check for transaction errors
+	if rpcResponse.Result.Code != 0 {
+		return fmt.Errorf("transaction error: code %d", rpcResponse.Result.Code)
+	}
+
+	// Store the transaction hash
+	hash := rpcResponse.Result.Hash
+	logger.Printf("Transaction %s submitted to Layer 1 with hash: %s", tx.ID, hash)
+
+	// Create a simulated response for now
+	// In a real implementation, we would either wait for the transaction to be committed
+	// or retrieve the result from a query
+	simulatedResponse := DeWSResponse{
+		StatusCode: 200,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       fmt.Sprintf(`{"success":true,"tx_hash":"%s","block_height":0}`, hash),
+	}
+
+	// Serialize and store response
+	respData, err := json.Marshal(simulatedResponse)
+	if err != nil {
+		return fmt.Errorf("error serializing response: %v", err)
+	}
+
+	tx.Response = respData
+
+	return nil
+}
+
+// getRPCEndpoint determines the CometBFT RPC endpoint based on the Layer 1 API endpoint
+func getRPCEndpoint(apiEndpoint string) string {
+	// If the endpoint explicitly contains an RPC path, use it directly
+	if strings.Contains(apiEndpoint, "/rpc") {
+		return apiEndpoint
+	}
+
+	// Extract the host and port
+	url, err := url.Parse(apiEndpoint)
+	if err != nil {
+		// If parsing fails, make best effort - assume default port 9001
+		logger.Printf("Error parsing endpoint URL: %v, using localhost:9001", err)
+		return "http://localhost:9001"
+	}
+
+	host := url.Hostname()
+
+	// Use port 9001 as requested
+	return fmt.Sprintf("http://%s:9001", host)
+}
+
+// add adds a transaction to the store
+func (s *TransactionStore) add(tx *Transaction) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transactions[tx.ID] = tx
+}
+
+// get retrieves a transaction from the store
+func (s *TransactionStore) get(id string) *Transaction {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.transactions[id]
+}
+
+// update updates a transaction in the store
+func (s *TransactionStore) update(tx *Transaction) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transactions[tx.ID] = tx
+}
+
+// generateTxID generates a unique transaction ID
+func generateTxID() string {
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s-%d", *nodeID, time.Now().UnixNano())))
+	return hex.EncodeToString(hash[:])
 }

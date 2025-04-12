@@ -321,6 +321,14 @@ func (app *DeWSApplication) FinalizeBlock(
 			continue
 		}
 
+		if tx.Request.Method == "" || tx.Request.Path == "" || tx.Request.RequestID == "" {
+			txResults[i] = &abcitypes.ExecTxResult{
+				Code: 2,
+				Log:  "Empty request in transaction",
+			}
+			continue
+		}
+
 		// Generate a transaction ID
 		txID := generateTxID(tx.Request.RequestID, tx.OriginNodeID)
 
