@@ -1,0 +1,20 @@
+services:
+  postgres-l2:
+    image: postgres:14
+    container_name: postgres-l2
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: dewsdb
+    volumes:
+      - postgres-data-l2:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - l2-network
+
+networks:
+  l2-network:
+    driver: bridge
+volumes:
+  postgres-data-l2:
