@@ -2,16 +2,15 @@
 
 # Default values
 NODE_COUNT=4
-BASE_P2P_PORT=9001
-BASE_RPC_PORT=9000
+BASE_P2P_PORT=9000
+BASE_RPC_PORT=9001
 BASE_HTTP_PORT=5000
 BASE_DIR="./node-config"
 DISABLE_EMPTY_BLOCKS=false
 BASE_POSTGRES_PORT=5432
-MODE="prod"  # Default to production mode
 
 # Parse command line options
-while getopts ":n:d:p:r:h:e:m:" opt; do
+while getopts ":n:d:p:r:h:e" opt; do
     case $opt in
     n) NODE_COUNT="$OPTARG" ;;
     d) BASE_DIR="$OPTARG" ;;
@@ -19,19 +18,12 @@ while getopts ":n:d:p:r:h:e:m:" opt; do
     r) BASE_RPC_PORT="$OPTARG" ;;
     h) BASE_HTTP_PORT="$OPTARG" ;;
     e) DISABLE_EMPTY_BLOCKS=true ;;
-    m) MODE="$OPTARG" ;;
     \?)
         echo "Invalid option -$OPTARG" >&2
         exit 1
         ;;
     esac
 done
-
-# Validate mode
-if [ "$MODE" != "prod" ] && [ "$MODE" != "dev" ]; then
-    echo "Invalid mode: $MODE. Mode must be 'prod' or 'dev'"
-    exit 1
-fi
 
 if [ "$DISABLE_EMPTY_BLOCKS" = true ]; then
     echo "Empty blocks will be disabled"
@@ -44,7 +36,7 @@ if [ $NODE_COUNT -lt 4 ]; then
     echo "With $NODE_COUNT nodes, the network cannot tolerate any faults."
 fi
 
-echo "Setting up a network with $NODE_COUNT nodes in $MODE mode"
+echo "Setting up a network with $NODE_COUNT nodes"
 echo "Base directory: $BASE_DIR"
 echo "Base P2P port: $BASE_P2P_PORT"
 echo "Base RPC port: $BASE_RPC_PORT"
@@ -152,11 +144,45 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     echo "Local development settings configured for node$i"
 done
 
-# Create docker-compose files for both development and production
-echo "Clearing and creating new docker-compose files..."
+# Add config for Docker setup
+if [ -n "$DOCKER_ENV" ]; then
+    echo "Applying Docker-specific configuration..."
+    for i in $(seq 0 $((NODE_COUNT - 1))); do
+        # Get current peers configuration
+        PEERS=$(grep "^persistent_peers =" "$BASE_DIR/node$i/config/config.toml" | sed 's/persistent_peers = "//' | sed 's/"$//')
 
-# Generate docker-compose.dev.yml for development
-cat > "./docker-compose.dev.yml" << EOL
+        # Replace 127.0.0.1 with container names (cometbft-node0, cometbft-node1, etc.)
+        # The container name needs to match the node number in the port
+        NEW_PEERS=""
+        IFS=',' read -ra PEER_ARRAY <<<"$PEERS"
+        for peer in "${PEER_ARRAY[@]}"; do
+            # Extract node ID and port
+            NODE_ID=$(echo "$peer" | cut -d@ -f1)
+            PORT=$(echo "$peer" | cut -d: -f2)
+
+            # Calculate node number from port
+            NODE_NUM=$(((PORT - BASE_P2P_PORT) / 2))
+
+            # Create new peer address with container name
+            if [ -z "$NEW_PEERS" ]; then
+                NEW_PEERS="${NODE_ID}@cometbft-node${NODE_NUM}:${PORT}"
+            else
+                NEW_PEERS="${NEW_PEERS},${NODE_ID}@cometbft-node${NODE_NUM}:${PORT}"
+            fi
+        done
+
+        # Update the config file with new peers
+        sed -i.bak "s|^persistent_peers = \".*\"|persistent_peers = \"$NEW_PEERS\"|" "$BASE_DIR/node$i/config/config.toml"
+
+        echo "Docker-specific peers configured for node$i: $NEW_PEERS"
+    done
+fi
+
+# Create a docker-compose.yml file
+rm -rf
+echo "Clearing and creating new docker-compose.yml..."
+
+cat >"./docker-compose.yml" <<EOL
 services:
 EOL
 
@@ -166,9 +192,9 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     http_port=$((BASE_HTTP_PORT + i))
     postgres_port=$((BASE_POSTGRES_PORT + i))
 
-    cat >> "./docker-compose.dev.yml" << EOL
+    cat >>"./docker-compose.yml" <<EOL
   cometbft-node$i:
-    image: dews-image-dev:latest
+    image: dews-image:latest
     container_name: cometbft-node$i
     ports:
       - "$http_port:$http_port"
@@ -198,7 +224,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
 EOL
 done
 
-cat >> "./docker-compose.dev.yml" << EOL
+cat >>"./docker-compose.yml" <<EOL
 networks:
   dews-network:
     driver: bridge
@@ -207,71 +233,15 @@ volumes:
 EOL
 
 for i in $(seq 0 $((NODE_COUNT - 1))); do
-  cat >> "./docker-compose.dev.yml" << EOL
+  echo "Setting up Postgres container for node $i..."
+  cat >> "./docker-compose.yml" << EOL
   postgres-data-node$i:
 EOL
 done
+echo "Done setting up Postgres $i..."
 
-# Generate docker-compose.prod.yml for production
-cat > "./docker-compose.prod.yml" << EOL
-services:
-EOL
-
-for i in $(seq 0 $((NODE_COUNT - 1))); do
-    p2p_port=$((BASE_P2P_PORT + i * 2))
-    rpc_port=$((BASE_RPC_PORT + i * 2))
-    http_port=$((BASE_HTTP_PORT + i))
-    postgres_port=$((BASE_POSTGRES_PORT + i))
-
-    cat >> "./docker-compose.prod.yml" << EOL
-  cometbft-node$i:
-    image: dews-image:latest
-    container_name: cometbft-node$i
-    ports:
-      - "$http_port:$http_port"
-      - "$p2p_port:$p2p_port"
-      - "$rpc_port:$rpc_port"
-    volumes:
-      - $BASE_DIR/node$i:/root/.cometbft
-    command: >
-        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:5432"
-    networks:
-      - dews-network
-  postgres-node$i:
-    image: postgres:14
-    container_name: postgres-node$i
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: dewsdb
-    volumes:
-      - postgres-data-node$i:/var/lib/postgresql/data
-    ports:
-      - "$postgres_port:5432"
-    networks:
-      - dews-network
-
-EOL
-done
-
-cat >> "./docker-compose.prod.yml" << EOL
-networks:
-  dews-network:
-    driver: bridge
-
-volumes:
-EOL
-
-for i in $(seq 0 $((NODE_COUNT - 1))); do
-  cat >> "./docker-compose.prod.yml" << EOL
-  postgres-data-node$i:
-EOL
-done
-
-echo "docker-compose files created with $NODE_COUNT nodes"
-echo "Note: You need to build the appropriate Docker image first:"
-echo "For dev mode: docker build -f Dockerfile.dev -t dews-image-dev:latest ."
-echo "For prod mode: docker build -f Dockerfile.prod -t dews-image:latest ."
+echo "docker-compose.yml created with $NODE_COUNT nodes"
+echo "Note: You need to build the dews-image first: docker build -t dews-image:latest ."
 
 # Fix permissions for Docker access
 echo "Setting appropriate permissions for Docker..."
@@ -323,19 +293,11 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     echo "Node $i: http://localhost:$http_port"
 done
 
-# Display mode-specific instructions
-echo ""
-if [ "$MODE" = "dev" ]; then
-    cp docker-compose.dev.yml docker-compose.yml
-    rm -rf docker-compose.dev.yml
-    rm -rf docker-compose.prod.yml
-    echo "Development mode is active. Using docker-compose.dev.yml which mounts local binary."
-    echo "To run using volume sharing: make fast-dev"
-    echo "To run using docker image: make dev"
-else
-    cp docker-compose.prod.yml docker-compose.yml
-    rm -rf docker-compose.dev.yml
-    rm -rf docker-compose.prod.yml
-    echo "Production mode is active. Using docker-compose.prod.yml which uses pre-built binary in the image."
-    echo "To run: make prod"
-fi
+# Display persistent peers configuration for each node
+# echo ""
+# echo "==== Persistent Peers Configuration ===="
+# echo ""
+# for i in $(seq 0 $((NODE_COUNT-1))); do
+#     echo "Node $i persistent peers:"
+#     grep "^persistent_peers =" "$BASE_DIR/node$i/config/config.toml"
+# done

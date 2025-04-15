@@ -19,28 +19,28 @@ import (
 	"gorm.io/gorm"
 )
 
-// DeWSApplication implements the ABCI interface for DeWS
-type DeWSApplication struct {
+// Application implements the ABCI interface for the nodes
+type Application struct {
 	badgerDB        *badger.DB
 	postgresDB      *gorm.DB
 	onGoingBlock    *badger.Txn
 	serviceRegistry *service_registry.ServiceRegistry
 	nodeID          string
 	mu              sync.Mutex
-	config          *DeWSConfig
+	config          *AppConfig
 	logger          cmtlog.Logger
 }
 
-// DeWSConfig contains configuration for the DeWS application
-type DeWSConfig struct {
+// AppConfig contains configuration for the application
+type AppConfig struct {
 	NodeID        string
 	RequiredVotes int  // Number of votes required for consensus
 	LogAllTxs     bool // Whether to log all transactions, even failed ones
 }
 
 // NewDeWSApplication creates a new DeWS application
-func NewDeWSApplication(badgerDB *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *DeWSConfig, logger cmtlog.Logger, db *gorm.DB) *DeWSApplication {
-	return &DeWSApplication{
+func NewDeWSApplication(badgerDB *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *AppConfig, logger cmtlog.Logger, db *gorm.DB) *Application {
+	return &Application{
 		badgerDB:        badgerDB,
 		serviceRegistry: serviceRegistry,
 		nodeID:          "",
@@ -50,15 +50,12 @@ func NewDeWSApplication(badgerDB *badger.DB, serviceRegistry *service_registry.S
 	}
 }
 
-func (app *DeWSApplication) SetNodeID(id string) {
+func (app *Application) SetNodeID(id string) {
 	app.nodeID = id
 }
 
 // Info implements the ABCI Info method
-func (app *DeWSApplication) Info(
-	_ context.Context,
-	info *abcitypes.InfoRequest,
-) (*abcitypes.InfoResponse, error) {
+func (app *Application) Info(_ context.Context, info *abcitypes.InfoRequest) (*abcitypes.InfoResponse, error) {
 	// Return application info including last block height and app hash
 	lastBlockHeight := int64(0)
 	var lastBlockAppHash []byte
@@ -110,10 +107,7 @@ func (app *DeWSApplication) Info(
 }
 
 // Query implements the ABCI Query method
-func (app *DeWSApplication) Query(
-	_ context.Context,
-	req *abcitypes.QueryRequest,
-) (*abcitypes.QueryResponse, error) {
+func (app *Application) Query(_ context.Context, req *abcitypes.QueryRequest) (*abcitypes.QueryResponse, error) {
 	// Query can look up transactions, verify responses, etc.
 	if len(req.Data) == 0 {
 		return &abcitypes.QueryResponse{
@@ -161,7 +155,7 @@ func (app *DeWSApplication) Query(
 }
 
 // verifyTransaction looks up a transaction and its consensus status
-func (app *DeWSApplication) verifyTransaction(txID []byte) (*abcitypes.QueryResponse, error) {
+func (app *Application) verifyTransaction(txID []byte) (*abcitypes.QueryResponse, error) {
 	var resp abcitypes.QueryResponse
 
 	err := app.badgerDB.View(func(txn *badger.Txn) error {
@@ -220,7 +214,7 @@ func (app *DeWSApplication) verifyTransaction(txID []byte) (*abcitypes.QueryResp
 }
 
 // CheckTx implements the ABCI CheckTx method
-func (app *DeWSApplication) CheckTx(
+func (app *Application) CheckTx(
 	_ context.Context,
 	check *abcitypes.CheckTxRequest,
 ) (*abcitypes.CheckTxResponse, error) {
@@ -239,7 +233,7 @@ func (app *DeWSApplication) CheckTx(
 }
 
 // InitChain implements the ABCI InitChain method
-func (app *DeWSApplication) InitChain(
+func (app *Application) InitChain(
 	_ context.Context,
 	chain *abcitypes.InitChainRequest,
 ) (*abcitypes.InitChainResponse, error) {
@@ -248,7 +242,7 @@ func (app *DeWSApplication) InitChain(
 }
 
 // PrepareProposal implements the ABCI PrepareProposal method
-func (app *DeWSApplication) PrepareProposal(
+func (app *Application) PrepareProposal(
 	_ context.Context,
 	proposal *abcitypes.PrepareProposalRequest,
 ) (*abcitypes.PrepareProposalResponse, error) {
@@ -257,13 +251,13 @@ func (app *DeWSApplication) PrepareProposal(
 }
 
 // ProcessProposal implements the ABCI ProcessProposal method
-func (app *DeWSApplication) ProcessProposal(
+func (app *Application) ProcessProposal(
 	_ context.Context,
 	proposal *abcitypes.ProcessProposalRequest,
 ) (*abcitypes.ProcessProposalResponse, error) {
 	// Process the proposed block
 	for _, tx := range proposal.Txs {
-		var dewsTx service_registry.DeWSTransaction
+		var dewsTx service_registry.Transaction
 		if err := json.Unmarshal(tx, &dewsTx); err != nil {
 			// If we can't parse the transaction, we reject the proposal
 			return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, nil
@@ -302,7 +296,7 @@ func (app *DeWSApplication) ProcessProposal(
 }
 
 // FinalizeBlock implements the ABCI FinalizeBlock method
-func (app *DeWSApplication) FinalizeBlock(
+func (app *Application) FinalizeBlock(
 	_ context.Context,
 	req *abcitypes.FinalizeBlockRequest,
 ) (*abcitypes.FinalizeBlockResponse, error) {
@@ -314,7 +308,7 @@ func (app *DeWSApplication) FinalizeBlock(
 	app.onGoingBlock = app.badgerDB.NewTransaction(true)
 
 	for i, txBytes := range req.Txs {
-		var tx service_registry.DeWSTransaction
+		var tx service_registry.Transaction
 
 		if err := json.Unmarshal(txBytes, &tx); err != nil {
 			txResults[i] = &abcitypes.ExecTxResult{Code: 1, Log: "Invalid transaction format"}
@@ -402,7 +396,7 @@ func (app *DeWSApplication) FinalizeBlock(
 }
 
 // Commit implements the ABCI Commit method
-func (app *DeWSApplication) Commit(
+func (app *Application) Commit(
 	_ context.Context,
 	commit *abcitypes.CommitRequest,
 ) (*abcitypes.CommitResponse, error) {
@@ -416,7 +410,7 @@ func (app *DeWSApplication) Commit(
 }
 
 // ListSnapshots implements the ABCI ListSnapshots method
-func (app *DeWSApplication) ListSnapshots(
+func (app *Application) ListSnapshots(
 	_ context.Context,
 	snapshots *abcitypes.ListSnapshotsRequest,
 ) (*abcitypes.ListSnapshotsResponse, error) {
@@ -424,7 +418,7 @@ func (app *DeWSApplication) ListSnapshots(
 }
 
 // OfferSnapshot implements the ABCI OfferSnapshot method
-func (app *DeWSApplication) OfferSnapshot(
+func (app *Application) OfferSnapshot(
 	_ context.Context,
 	snapshot *abcitypes.OfferSnapshotRequest,
 ) (*abcitypes.OfferSnapshotResponse, error) {
@@ -432,7 +426,7 @@ func (app *DeWSApplication) OfferSnapshot(
 }
 
 // LoadSnapshotChunk implements the ABCI LoadSnapshotChunk method
-func (app *DeWSApplication) LoadSnapshotChunk(
+func (app *Application) LoadSnapshotChunk(
 	_ context.Context,
 	chunk *abcitypes.LoadSnapshotChunkRequest,
 ) (*abcitypes.LoadSnapshotChunkResponse, error) {
@@ -440,7 +434,7 @@ func (app *DeWSApplication) LoadSnapshotChunk(
 }
 
 // ApplySnapshotChunk implements the ABCI ApplySnapshotChunk method
-func (app *DeWSApplication) ApplySnapshotChunk(
+func (app *Application) ApplySnapshotChunk(
 	_ context.Context,
 	chunk *abcitypes.ApplySnapshotChunkRequest,
 ) (*abcitypes.ApplySnapshotChunkResponse, error) {
@@ -450,7 +444,7 @@ func (app *DeWSApplication) ApplySnapshotChunk(
 }
 
 // ExtendVote implements the ABCI ExtendVote method
-func (app *DeWSApplication) ExtendVote(
+func (app *Application) ExtendVote(
 	_ context.Context,
 	extend *abcitypes.ExtendVoteRequest,
 ) (*abcitypes.ExtendVoteResponse, error) {
@@ -458,7 +452,7 @@ func (app *DeWSApplication) ExtendVote(
 }
 
 // VerifyVoteExtension implements the ABCI VerifyVoteExtension method
-func (app *DeWSApplication) VerifyVoteExtension(
+func (app *Application) VerifyVoteExtension(
 	_ context.Context,
 	verify *abcitypes.VerifyVoteExtensionRequest,
 ) (*abcitypes.VerifyVoteExtensionResponse, error) {
@@ -468,7 +462,7 @@ func (app *DeWSApplication) VerifyVoteExtension(
 // Helper Functions
 
 // storeTransaction stores the transaction in the database
-func (app *DeWSApplication) storeTransaction(txID string, tx *service_registry.DeWSTransaction, status string, rawTx []byte) *abcitypes.ExecTxResult {
+func (app *Application) storeTransaction(txID string, tx *service_registry.Transaction, status string, rawTx []byte) *abcitypes.ExecTxResult {
 	// Store the transaction
 	txKey := append([]byte("tx:"), []byte(txID)...)
 	err := app.onGoingBlock.Set(txKey, rawTx)
@@ -518,7 +512,7 @@ func (app *DeWSApplication) storeTransaction(txID string, tx *service_registry.D
 }
 
 // compareResponses compares two DeWSResponse objects for equality
-func compareResponses(a, b *service_registry.DeWSResponse) bool {
+func compareResponses(a, b *service_registry.Response) bool {
 	// Compare status code
 	if a.StatusCode != b.StatusCode {
 		return false

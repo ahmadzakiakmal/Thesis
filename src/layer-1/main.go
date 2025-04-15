@@ -84,7 +84,7 @@ func main() {
 	}()
 
 	//? Create DeWS Application
-	dewsConfig := &app.DeWSConfig{
+	dewsConfig := &app.AppConfig{
 		NodeID:        filepath.Base(homeDir), // Use directory name as node ID
 		RequiredVotes: 2,                      // For demo, 2 votes required
 		LogAllTxs:     true,

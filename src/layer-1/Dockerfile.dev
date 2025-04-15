@@ -1,0 +1,23 @@
+FROM alpine:3.17
+
+# Install required system packages only
+# This is a minimal image for development since we'll mount the binary
+RUN apk add --no-cache bash curl jq libc6-compat
+
+# Create a directory for the binary to be mounted
+RUN mkdir -p /app
+
+# Create directory for the node
+RUN mkdir -p /root/.cometbft
+
+# Environment variables with defaults
+ENV CMT_HOME=/root/.cometbft \
+    NODE_MONIKER=node \
+    HTTP_PORT=5000 \
+    POSTGRES_PORT=5432
+
+# Expose ports - HTTP, P2P, and RPC ports
+EXPOSE 5000-6000 9000-9100
+
+# The binary will be mounted at runtime, so this is just a placeholder
+CMD ["/app/bin", "--cmt-home=/root/.cometbft", "--http-port=5000", "--postgres-host=postgres-node0:5432"]

@@ -24,7 +24,7 @@ import (
 
 // DeWSWebServer handles HTTP requests using the DeWS protocol
 type DeWSWebServer struct {
-	app              *app.DeWSApplication
+	app              *app.Application
 	httpAddr         string
 	server           *http.Server
 	logger           cmtlog.Logger
@@ -76,7 +76,7 @@ type ClientResponse struct {
 }
 
 // NewDeWSWebServer creates a new DeWS web server
-func NewDeWSWebServer(app *app.DeWSApplication, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *service_registry.ServiceRegistry, db *gorm.DB) (*DeWSWebServer, error) {
+func NewDeWSWebServer(app *app.Application, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *service_registry.ServiceRegistry, db *gorm.DB) (*DeWSWebServer, error) {
 	mux := http.NewServeMux()
 
 	rpcAddr := fmt.Sprintf("http://localhost:%s", extractPortFromAddress(node.Config().RPC.ListenAddress))
@@ -287,7 +287,7 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Convert HTTP request to DeWSRequest
-	dewsRequest, err := service_registry.ConvertHTTPRequestToDeWSRequest(r, requestID)
+	dewsRequest, err := service_registry.ConvertHttpRequestToRequest(r, requestID)
 	if err != nil {
 		http.Error(w, "Failed to process request: "+err.Error(), http.StatusBadRequest)
 		server.logger.Error("Failed to convert HTTP request", "err", err)
@@ -319,7 +319,7 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create a complete DeWS transaction
-	dewsTransaction := &service_registry.DeWSTransaction{
+	dewsTransaction := &service_registry.Transaction{
 		Request:      *dewsRequest,
 		Response:     *dewsResponse,
 		OriginNodeID: string(server.node.ConsensusReactor().Switch.NodeInfo().ID()),
@@ -475,7 +475,7 @@ func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionSt
 	tx := res.Txs[0]
 
 	// Parse the transaction
-	var dewsTx service_registry.DeWSTransaction
+	var dewsTx service_registry.Transaction
 	err = json.Unmarshal(tx.Tx, &dewsTx)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing transaction: %w", err)

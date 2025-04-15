@@ -15,8 +15,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// DeWSRequest represents the client's original HTTP request
-type DeWSRequest struct {
+// Request represents the client's original HTTP request
+type Request struct {
 	Method     string            `json:"method"`
 	Path       string            `json:"path"`
 	Headers    map[string]string `json:"headers"`
@@ -26,8 +26,8 @@ type DeWSRequest struct {
 	Timestamp  time.Time         `json:"timestamp"`
 }
 
-// DeWSResponse represents the computed response from a server
-type DeWSResponse struct {
+// Response represents the computed response from a server
+type Response struct {
 	StatusCode int               `json:"status_code"`
 	Headers    map[string]string `json:"headers"`
 	Body       string            `json:"body"`
@@ -35,27 +35,27 @@ type DeWSResponse struct {
 	BodyCustom interface{}       `json:"body_custom"`
 }
 
-// DeWSTransaction represents a complete DeWS transaction
-type DeWSTransaction struct {
-	Request      DeWSRequest  `json:"request"`
-	Response     DeWSResponse `json:"response"`
-	OriginNodeID string       `json:"origin_node_id"` // ID of the node that originated the transaction
-	BlockHeight  int64        `json:"block_height,omitempty"`
+// Transaction represents a complete transaction, pairing the Request and the Response
+type Transaction struct {
+	Request      Request  `json:"request"`
+	Response     Response `json:"response"`
+	OriginNodeID string   `json:"origin_node_id"` // ID of the node that originated the transaction
+	BlockHeight  int64    `json:"block_height,omitempty"`
 }
 
 // Add this struct to your transaction types
-type DeWSTx struct {
-	ServerInfo    string      `json:"serverInfo"`
-	RequestURL    string      `json:"requestURL"`
-	RequestMethod string      `json:"requestMethod"`
-	APIInfo       string      `json:"apiInfo"`
-	RequestTime   time.Time   `json:"requestTime"`
-	RequestData   interface{} `json:"requestData"`
-	ResponseData  interface{} `json:"responseData"`
-}
+// type DeWSTx struct {
+// 	ServerInfo    string      `json:"serverInfo"`
+// 	RequestURL    string      `json:"requestURL"`
+// 	RequestMethod string      `json:"requestMethod"`
+// 	APIInfo       string      `json:"apiInfo"`
+// 	RequestTime   time.Time   `json:"requestTime"`
+// 	RequestData   interface{} `json:"requestData"`
+// 	ResponseData  interface{} `json:"responseData"`
+// }
 
 // ServiceHandler is a function type for service handlers
-type ServiceHandler func(*DeWSRequest) (*DeWSResponse, error)
+type ServiceHandler func(*Request) (*Response, error)
 
 // RouteKey is used to uniquely identify a route
 type RouteKey struct {
@@ -74,19 +74,12 @@ type ServiceRegistry struct {
 }
 
 // SerializeToBytes converts the transaction to a byte array for blockchain storage
-func (t *DeWSTransaction) SerializeToBytes() ([]byte, error) {
+func (t *Transaction) SerializeToBytes() ([]byte, error) {
 	return json.Marshal(t)
 }
 
-// DeserializeFromBytes converts byte array from blockchain back to transaction
-func DeserializeFromBytes(data []byte) (*DeWSTransaction, error) {
-	var tx DeWSTransaction
-	err := json.Unmarshal(data, &tx)
-	return &tx, err
-}
-
-// ConvertHTTPRequestToDeWSRequest converts an http.Request to DeWSRequest
-func ConvertHTTPRequestToDeWSRequest(r *http.Request, requestID string) (*DeWSRequest, error) {
+// ConvertHttpRequestToRequest converts an http.Request to Request
+func ConvertHttpRequestToRequest(r *http.Request, requestID string) (*Request, error) {
 	// Extract headers
 	headers := make(map[string]string)
 	for name, values := range r.Header {
@@ -106,7 +99,7 @@ func ConvertHTTPRequestToDeWSRequest(r *http.Request, requestID string) (*DeWSRe
 		}
 	}
 
-	return &DeWSRequest{
+	return &Request{
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		Headers:    headers,
@@ -171,7 +164,7 @@ func (sr *ServiceRegistry) GetHandlerForPath(method, path string) (ServiceHandle
 	return nil, false
 }
 
-// matchPath does simple pattern matching for routes
+// matchPath does simple pattern matching for routes.
 // It supports patterns like "/user/:id" matching "/user/123"
 func matchPath(pattern, path string) bool {
 	patternParts := strings.Split(pattern, "/")
@@ -195,13 +188,13 @@ func matchPath(pattern, path string) bool {
 	return true
 }
 
-// RegisterDefaultServices sets up the default services for the DeWS system
+// RegisterDefaultServices sets up the default services for the BFT system
 func (sr *ServiceRegistry) RegisterDefaultServices() {
-	sr.RegisterHandler("POST", "/api/customers", true, func(req *DeWSRequest) (*DeWSResponse, error) {
+	sr.RegisterHandler("POST", "/api/customers", true, func(req *Request) (*Response, error) {
 		var newUser models.User
 		err := json.Unmarshal([]byte(req.Body), &newUser)
 		if err != nil {
-			return &DeWSResponse{
+			return &Response{
 				StatusCode: http.StatusInternalServerError,
 				Headers:    map[string]string{"Content-Type": "application/json"},
 				Body:       "failed to parse body",
@@ -219,7 +212,7 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 			dbTx.Rollback()
 			log.Printf("Error on DB transaction: %s\n", err.Error())
 			responseBody := fmt.Sprintf("error on database transaction: %s", err.Error())
-			return &DeWSResponse{
+			return &Response{
 				StatusCode: http.StatusInternalServerError,
 				Headers:    map[string]string{"Content-Type": "application/json"},
 				Body:       responseBody,
@@ -228,19 +221,19 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 
 		log.Println("Success")
 		dbTx.Commit()
-		return &DeWSResponse{
+		return &Response{
 			StatusCode: http.StatusCreated,
 			Headers:    map[string]string{"Content-Type": "application/json"},
 			Body:       fmt.Sprintf(`{"message":"Customer created successfully","email":"%s","requestId":"%s"}`, newUser.Email, req.RequestID),
 		}, nil
 	})
 
-	sr.RegisterHandler("GET", "/api/customers", true, func(req *DeWSRequest) (*DeWSResponse, error) {
+	sr.RegisterHandler("GET", "/api/customers", true, func(req *Request) (*Response, error) {
 		var customers []models.User
 		err := sr.database.Find(&customers).Error
 		if err != nil {
 			responseBody := fmt.Sprintf("error on database transaction: %s", err.Error())
-			return &DeWSResponse{
+			return &Response{
 				StatusCode: http.StatusUnprocessableEntity,
 				Headers:    map[string]string{"Content-Type": "application/json"},
 				Body:       responseBody,
@@ -252,13 +245,13 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 		}
 		jsonBytes, err := json.Marshal(responseBody)
 		if err != nil {
-			return &DeWSResponse{
+			return &Response{
 				StatusCode: http.StatusInternalServerError,
 				Headers:    map[string]string{"Content-Type": "application/json"},
 				Body:       `{"error":"failed to marshal response"}`,
 			}, err
 		}
-		return &DeWSResponse{
+		return &Response{
 			StatusCode: http.StatusOK,
 			Headers:    map[string]string{"Content-Type": "application/json"},
 			Body:       string(jsonBytes),
@@ -270,14 +263,11 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 }
 
 // GenerateResponse executes the request and generates a response
-func (req *DeWSRequest) GenerateResponse(services *ServiceRegistry) (*DeWSResponse, error) {
-	// This is where we'll implement the actual service execution
-	// For now, it's a placeholder
-
+func (req *Request) GenerateResponse(services *ServiceRegistry) (*Response, error) {
 	// Find the appropriate service handler for this request
 	handler, found := services.GetHandlerForPath(req.Method, req.Path)
 	if !found {
-		return &DeWSResponse{
+		return &Response{
 			StatusCode: http.StatusNotFound,
 			Headers:    map[string]string{"Content-Type": "text/plain"},
 			Body:       fmt.Sprintf("Service not found for %s %s", req.Method, req.Path),

@@ -4,10 +4,9 @@ services:
     container_name: cometbft-node0
     ports:
       - "5000:5000"
-      - "9000:9000"
       - "9001:9001"
+      - "9000:9000"
     volumes:
-      - ./build/bin:/app/bin
       - ./node-config/node0:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5000 --postgres-host=postgres-node0:5432"
@@ -32,10 +31,9 @@ services:
     container_name: cometbft-node1
     ports:
       - "5001:5001"
-      - "9002:9002"
       - "9003:9003"
+      - "9002:9002"
     volumes:
-      - ./build/bin:/app/bin
       - ./node-config/node1:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5001 --postgres-host=postgres-node1:5432"
@@ -60,10 +58,9 @@ services:
     container_name: cometbft-node2
     ports:
       - "5002:5002"
-      - "9004:9004"
       - "9005:9005"
+      - "9004:9004"
     volumes:
-      - ./build/bin:/app/bin
       - ./node-config/node2:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5002 --postgres-host=postgres-node2:5432"
@@ -88,10 +85,9 @@ services:
     container_name: cometbft-node3
     ports:
       - "5003:5003"
-      - "9006:9006"
       - "9007:9007"
+      - "9006:9006"
     volumes:
-      - ./build/bin:/app/bin
       - ./node-config/node3:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5003 --postgres-host=postgres-node3:5432"
