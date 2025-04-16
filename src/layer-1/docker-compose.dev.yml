@@ -1,12 +1,13 @@
 services:
   cometbft-node0:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node0
     ports:
       - "5000:5000"
       - "9001:9001"
       - "9000:9000"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node0:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5000 --postgres-host=postgres-node0:5432"
@@ -27,13 +28,14 @@ services:
       - dews-network
 
   cometbft-node1:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node1
     ports:
       - "5001:5001"
       - "9003:9003"
       - "9002:9002"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node1:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5001 --postgres-host=postgres-node1:5432"
@@ -54,13 +56,14 @@ services:
       - dews-network
 
   cometbft-node2:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node2
     ports:
       - "5002:5002"
       - "9005:9005"
       - "9004:9004"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node2:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5002 --postgres-host=postgres-node2:5432"
@@ -81,13 +84,14 @@ services:
       - dews-network
 
   cometbft-node3:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node3
     ports:
       - "5003:5003"
       - "9007:9007"
       - "9006:9006"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node3:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5003 --postgres-host=postgres-node3:5432"
@@ -108,13 +112,14 @@ services:
       - dews-network
 
   cometbft-node4:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node4
     ports:
       - "5004:5004"
       - "9009:9009"
       - "9008:9008"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node4:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5004 --postgres-host=postgres-node4:5432"
@@ -135,13 +140,14 @@ services:
       - dews-network
 
   cometbft-node5:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node5
     ports:
       - "5005:5005"
       - "9011:9011"
       - "9010:9010"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node5:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5005 --postgres-host=postgres-node5:5432"
@@ -162,13 +168,14 @@ services:
       - dews-network
 
   cometbft-node6:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node6
     ports:
       - "5006:5006"
       - "9013:9013"
       - "9012:9012"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node6:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5006 --postgres-host=postgres-node6:5432"
@@ -189,13 +196,14 @@ services:
       - dews-network
 
   cometbft-node7:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node7
     ports:
       - "5007:5007"
       - "9015:9015"
       - "9014:9014"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node7:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5007 --postgres-host=postgres-node7:5432"
@@ -216,13 +224,14 @@ services:
       - dews-network
 
   cometbft-node8:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node8
     ports:
       - "5008:5008"
       - "9017:9017"
       - "9016:9016"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node8:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5008 --postgres-host=postgres-node8:5432"
@@ -243,13 +252,14 @@ services:
       - dews-network
 
   cometbft-node9:
-    image: dews-image:latest
+    image: dews-image-dev:latest
     container_name: cometbft-node9
     ports:
       - "5009:5009"
       - "9019:9019"
       - "9018:9018"
     volumes:
+      - ./build/bin:/app/bin
       - ./node-config/node9:/root/.cometbft
     command: >
         sh -c "/app/bin --cmt-home=/root/.cometbft --http-port 5009 --postgres-host=postgres-node9:5432"

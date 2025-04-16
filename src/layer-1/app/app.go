@@ -38,8 +38,8 @@ type AppConfig struct {
 	LogAllTxs     bool // Whether to log all transactions, even failed ones
 }
 
-// NewDeWSApplication creates a new DeWS application
-func NewDeWSApplication(badgerDB *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *AppConfig, logger cmtlog.Logger, db *gorm.DB) *Application {
+// NewABCIApplication creates a new  application
+func NewABCIApplication(badgerDB *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *AppConfig, logger cmtlog.Logger, db *gorm.DB) *Application {
 	return &Application{
 		badgerDB:        badgerDB,
 		serviceRegistry: serviceRegistry,
@@ -246,7 +246,7 @@ func (app *Application) PrepareProposal(
 	_ context.Context,
 	proposal *abcitypes.PrepareProposalRequest,
 ) (*abcitypes.PrepareProposalResponse, error) {
-	// For DeWS, we want to include all transactions
+	// Include all transactions
 	return &abcitypes.PrepareProposalResponse{Txs: proposal.Txs}, nil
 }
 

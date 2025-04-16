@@ -212,8 +212,8 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
 EOL
 done
 
-# Generate docker-compose.prod.yml for production
-cat > "./docker-compose.prod.yml" << EOL
+# Generate docker-compose.yml for production
+cat > "./docker-compose.yml" << EOL
 services:
 EOL
 
@@ -223,7 +223,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     http_port=$((BASE_HTTP_PORT + i))
     postgres_port=$((BASE_POSTGRES_PORT + i))
 
-    cat >> "./docker-compose.prod.yml" << EOL
+    cat >> "./docker-compose.yml" << EOL
   cometbft-node$i:
     image: dews-image:latest
     container_name: cometbft-node$i
@@ -254,7 +254,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
 EOL
 done
 
-cat >> "./docker-compose.prod.yml" << EOL
+cat >> "./docker-compose.yml" << EOL
 networks:
   dews-network:
     driver: bridge
@@ -263,7 +263,7 @@ volumes:
 EOL
 
 for i in $(seq 0 $((NODE_COUNT - 1))); do
-  cat >> "./docker-compose.prod.yml" << EOL
+  cat >> "./docker-compose.yml" << EOL
   postgres-data-node$i:
 EOL
 done
@@ -271,7 +271,7 @@ done
 echo "docker-compose files created with $NODE_COUNT nodes"
 echo "Note: You need to build the appropriate Docker image first:"
 echo "For dev mode: docker build -f Dockerfile.dev -t dews-image-dev:latest ."
-echo "For prod mode: docker build -f Dockerfile.prod -t dews-image:latest ."
+echo "For prod mode: docker build -f Dockerfile -t dews-image:latest ."
 
 # Fix permissions for Docker access
 echo "Setting appropriate permissions for Docker..."
@@ -326,16 +326,10 @@ done
 # Display mode-specific instructions
 echo ""
 if [ "$MODE" = "dev" ]; then
-    cp docker-compose.dev.yml docker-compose.yml
-    rm -rf docker-compose.dev.yml
-    rm -rf docker-compose.prod.yml
-    echo "Development mode is active. Using docker-compose.dev.yml which mounts local binary."
-    echo "To run using volume sharing: make fast-dev"
+    echo "Development mode is active. Generated docker-compose.dev.yml which mounts local binary."
+    echo "To run using volume sharing: make dev-fast"
     echo "To run using docker image: make dev"
 else
-    cp docker-compose.prod.yml docker-compose.yml
-    rm -rf docker-compose.dev.yml
-    rm -rf docker-compose.prod.yml
-    echo "Production mode is active. Using docker-compose.prod.yml which uses pre-built binary in the image."
+    echo "Production mode is active. Generated docker-compose.yml which uses pre-built binary in the image."
     echo "To run: make prod"
 fi

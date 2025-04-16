@@ -19,34 +19,38 @@ import (
 	nm "github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/rpc/client"
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
+	cmtrpc "github.com/cometbft/cometbft/rpc/client/local"
 	"gorm.io/gorm"
 )
 
-// DeWSWebServer handles HTTP requests using the DeWS protocol
-type DeWSWebServer struct {
-	app              *app.Application
-	httpAddr         string
-	server           *http.Server
-	logger           cmtlog.Logger
-	node             *nm.Node
-	startTime        time.Time
-	serviceRegistry  *service_registry.ServiceRegistry
-	tendermintClient client.Client
-	peers            map[string]string // nodeID -> RPC URL
-	peersMu          sync.RWMutex
-	database         *gorm.DB
+// WebServer handles HTTP requests
+type WebServer struct {
+	app                *app.Application
+	httpAddr           string
+	server             *http.Server
+	logger             cmtlog.Logger
+	node               *nm.Node
+	startTime          time.Time
+	serviceRegistry    *service_registry.ServiceRegistry
+	cometBftHttpClient client.Client
+	cometBftRpcClient  *cmtrpc.Local
+	peers              map[string]string // nodeID -> RPC URL
+	peersMu            sync.RWMutex
+	database           *gorm.DB
 }
 
 // TransactionStatus represents the consensus status of a transaction
 type TransactionStatus struct {
-	TxID          string        `json:"tx_id"`
-	RequestID     string        `json:"request_id"`
-	Status        string        `json:"status"`
-	BlockHeight   int64         `json:"block_height"`
-	BlockHash     string        `json:"block_hash,omitempty"`
-	ConfirmTime   time.Time     `json:"confirm_time,omitempty"`
-	ResponseInfo  ResponseInfo  `json:"response_info,omitempty"`
-	ConsensusInfo ConsensusInfo `json:"consensus_info,omitempty"`
+	TxID              string        `json:"tx_id"`
+	RequestID         string        `json:"request_id"`
+	Status            string        `json:"status"`
+	BlockHeight       int64         `json:"block_height"`
+	BlockHash         string        `json:"block_hash,omitempty"`
+	ConfirmTime       time.Time     `json:"confirm_time"`
+	ResponseInfo      ResponseInfo  `json:"response_info"`
+	ConsensusInfo     ConsensusInfo `json:"consensus_info"`
+	BlockData         interface{}   `json:"block"`
+	BlockTransactions interface{}   `json:"block_transactions"`
 }
 
 // ResponseInfo contains information about the response
@@ -75,15 +79,15 @@ type ClientResponse struct {
 	NodeID        string            `json:"node_id"`
 }
 
-// NewDeWSWebServer creates a new DeWS web server
-func NewDeWSWebServer(app *app.Application, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *service_registry.ServiceRegistry, db *gorm.DB) (*DeWSWebServer, error) {
+// NewWebServer creates a new web server
+func NewWebServer(app *app.Application, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *service_registry.ServiceRegistry, db *gorm.DB) (*WebServer, error) {
 	mux := http.NewServeMux()
 
 	rpcAddr := fmt.Sprintf("http://localhost:%s", extractPortFromAddress(node.Config().RPC.ListenAddress))
 	logger.Info("Connecting to CometBFT RPC", "address", rpcAddr)
 
 	// Create HTTP client without WebSocket
-	tendermintClient, err := cmthttp.NewWithClient(
+	cometBftHttpClient, err := cmthttp.NewWithClient(
 		rpcAddr,
 		&http.Client{
 			Timeout: 10 * time.Second,
@@ -92,25 +96,26 @@ func NewDeWSWebServer(app *app.Application, httpPort string, logger cmtlog.Logge
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CometBFT client: %w", err)
 	}
-	err = tendermintClient.Start()
+	err = cometBftHttpClient.Start()
 	if err != nil {
 		return nil, fmt.Errorf("failed to start CometBFT client: %w", err)
 	}
 
-	server := &DeWSWebServer{
+	server := &WebServer{
 		app:      app,
 		httpAddr: ":" + httpPort,
 		server: &http.Server{
 			Addr:    ":" + httpPort,
 			Handler: mux,
 		},
-		logger:           logger,
-		node:             node,
-		startTime:        time.Now(),
-		serviceRegistry:  serviceRegistry,
-		tendermintClient: tendermintClient,
-		peers:            make(map[string]string),
-		database:         db,
+		logger:             logger,
+		node:               node,
+		startTime:          time.Now(),
+		serviceRegistry:    serviceRegistry,
+		cometBftHttpClient: cometBftHttpClient,
+		cometBftRpcClient:  cmtrpc.New(node),
+		peers:              make(map[string]string),
+		database:           db,
 	}
 
 	// Register routes
@@ -126,35 +131,33 @@ func NewDeWSWebServer(app *app.Application, httpPort string, logger cmtlog.Logge
 }
 
 // Start starts the web server
-func (server *DeWSWebServer) Start() error {
-	server.logger.Info("Starting DeWS web server", "addr", server.httpAddr)
+func (server *WebServer) Start() error {
+	server.logger.Info("Starting web server", "addr", server.httpAddr)
 	go func() {
 		if err := server.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			server.logger.Error("DeWS web server error: ", "err", err)
+			server.logger.Error("web server error: ", "err", err)
 		}
 	}()
 	return nil
 }
 
 // Shutdown gracefully shuts down the web server
-func (server *DeWSWebServer) Shutdown(ctx context.Context) error {
-	server.logger.Info("Shutting down DeWS web server")
+func (server *WebServer) Shutdown(ctx context.Context) error {
+	server.logger.Info("Shutting down web server")
 	return server.server.Shutdown(ctx)
 }
 
 // discoverPeers discovers other nodes in the network
-func (server *DeWSWebServer) discoverPeers() {
-	// For now, we'll use a simple approach based on the persistent_peers from config
-	// In a production system, this would be more dynamic
-
+func (server *WebServer) discoverPeers() {
 	persistentPeers := server.node.Config().P2P.PersistentPeers
+	server.logger.Info("Web Server", persistentPeers)
 	if persistentPeers == "" {
-		server.logger.Info("No persistent peers configured")
+		server.logger.Info("Web Server", "No persistent peers configured")
 		return
 	}
 
-	peers := strings.Split(persistentPeers, ",")
-	for _, peer := range peers {
+	peers := strings.SplitSeq(persistentPeers, ",")
+	for peer := range peers {
 		parts := strings.Split(peer, "@")
 		if len(parts) != 2 {
 			continue
@@ -191,7 +194,7 @@ func (server *DeWSWebServer) discoverPeers() {
 }
 
 // handleRoot handles the root endpoint which shows node status
-func (server *DeWSWebServer) handleRoot(w http.ResponseWriter, r *http.Request) {
+func (server *WebServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -199,16 +202,15 @@ func (server *DeWSWebServer) handleRoot(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "text/html")
 
-	w.Write([]byte("<h1>DeWS Node</h1>"))
+	w.Write([]byte("<h1>CometBFT Node</h1>"))
 	w.Write([]byte("<p>Node ID: " + string(server.node.NodeInfo().ID()) + "</p>"))
-	w.Write([]byte("<p>This node implements the DeWS protocol (Decentralized and Byzantine Fault-tolerant Web Services)</p>"))
 	rpcPort := extractPortFromAddress(server.node.Config().RPC.ListenAddress)
 	rpcAddrHtml := fmt.Sprintf("<p>RPC Address: <a href=\"http://localhost:%s\">http://localhost:%s</a>", rpcPort, rpcPort)
 	w.Write([]byte(rpcAddrHtml))
 }
 
 // handleDebug provides debugging information
-func (server *DeWSWebServer) handleDebug(w http.ResponseWriter, r *http.Request) {
+func (server *WebServer) handleDebug(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -232,7 +234,7 @@ func (server *DeWSWebServer) handleDebug(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Get Tendermint status
-	status, err := server.tendermintClient.Status(context.Background())
+	status, err := server.cometBftRpcClient.Status(context.Background())
 	outboundPeers, inboundPeers, dialingPeers := server.node.Switch().NumPeers()
 	debugInfo["num_peers_out"] = outboundPeers
 	debugInfo["num_peers_in"] = inboundPeers
@@ -250,7 +252,7 @@ func (server *DeWSWebServer) handleDebug(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Add ABCI info
-	abciInfo, err := server.tendermintClient.ABCIInfo(context.Background())
+	abciInfo, err := server.cometBftRpcClient.ABCIInfo(context.Background())
 	if err != nil {
 		debugInfo["abci_error"] = err.Error()
 	} else {
@@ -270,8 +272,8 @@ func (server *DeWSWebServer) handleDebug(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// handleAPI handles API requests using the DeWS protocol
-func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
+// handleAPI handles API requests using the protocol
+func (server *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
 	// Check if consensus should be used
@@ -286,8 +288,8 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert HTTP request to DeWSRequest
-	dewsRequest, err := service_registry.ConvertHttpRequestToRequest(r, requestID)
+	// Convert HTTP request to Request
+	request, err := service_registry.ConvertHttpRequestToRequest(r, requestID)
 	if err != nil {
 		http.Error(w, "Failed to process request: "+err.Error(), http.StatusBadRequest)
 		server.logger.Error("Failed to convert HTTP request", "err", err)
@@ -295,7 +297,7 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate response locally by processing the request
-	dewsResponse, err := dewsRequest.GenerateResponse(server.serviceRegistry)
+	response, err := request.GenerateResponse(server.serviceRegistry)
 	if err != nil {
 		http.Error(w, "Failed to process request: "+err.Error(), http.StatusInternalServerError)
 		server.logger.Error("Failed to generate response", "err", err)
@@ -310,24 +312,24 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 		server.logger.Info("Skipping consensus", "path", r.URL.Path)
 
 		// Write the response headers
-		for key, value := range dewsResponse.Headers {
+		for key, value := range response.Headers {
 			w.Header().Set(key, value)
 		}
-		w.WriteHeader(dewsResponse.StatusCode)
-		w.Write([]byte(dewsResponse.Body))
+		w.WriteHeader(response.StatusCode)
+		w.Write([]byte(response.Body))
 		return
 	}
 
-	// Create a complete DeWS transaction
-	dewsTransaction := &service_registry.Transaction{
-		Request:      *dewsRequest,
-		Response:     *dewsResponse,
+	// Create a complete transaction
+	transaction := &service_registry.Transaction{
+		Request:      *request,
+		Response:     *response,
 		OriginNodeID: string(server.node.ConsensusReactor().Switch.NodeInfo().ID()),
 		BlockHeight:  0, // Will be filled by the consensus process
 	}
 
 	// Serialize the transaction
-	txBytes, err := dewsTransaction.SerializeToBytes()
+	txBytes, err := transaction.SerializeToBytes()
 	if err != nil {
 		http.Error(w, "Failed to serialize transaction: "+err.Error(), http.StatusInternalServerError)
 		server.logger.Error("Failed to serialize transaction", "err", err)
@@ -336,7 +338,7 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 
 	// Broadcast transaction and wait for commitment
 	consensusStart := time.Now()
-	tendermintResponse, err := server.tendermintClient.BroadcastTxCommit(context.Background(), txBytes)
+	tendermintResponse, err := server.cometBftRpcClient.BroadcastTxCommit(context.Background(), txBytes)
 	consensusTime := time.Since(consensusStart)
 	server.logger.Info("Consensus time", "duration", consensusTime)
 
@@ -355,14 +357,14 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 
 	// Update the transaction with the block height from the response
 	blockHeight := tendermintResponse.Height
-	dewsTransaction.BlockHeight = blockHeight
+	transaction.BlockHeight = blockHeight
 
 	// Create a client response with metadata
 	clientResponse := ClientResponse{
-		StatusCode: dewsResponse.StatusCode,
-		Headers:    dewsResponse.Headers,
-		Body:       dewsResponse.Body,
-		BodyCustom: dewsResponse.BodyCustom,
+		StatusCode: response.StatusCode,
+		Headers:    response.Headers,
+		Body:       response.Body,
+		BodyCustom: response.BodyCustom,
 		Meta: TransactionStatus{
 			TxID:        hex.EncodeToString(tendermintResponse.Hash),
 			RequestID:   requestID,
@@ -371,9 +373,9 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 			BlockHash:   hex.EncodeToString(tendermintResponse.Hash),
 			ConfirmTime: time.Now(),
 			ResponseInfo: ResponseInfo{
-				StatusCode:  dewsResponse.StatusCode,
-				ContentType: dewsResponse.Headers["Content-Type"],
-				BodyLength:  len(dewsResponse.Body),
+				StatusCode:  response.StatusCode,
+				ContentType: response.Headers["Content-Type"],
+				BodyLength:  len(response.Body),
 			},
 			ConsensusInfo: ConsensusInfo{
 				TotalNodes:     server.countPeers() + 1, // +1 for this node
@@ -381,11 +383,11 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 		BlockchainRef: fmt.Sprintf("/status/%s", hex.EncodeToString(tendermintResponse.Hash)),
-		NodeID:        dewsTransaction.OriginNodeID,
+		NodeID:        transaction.OriginNodeID,
 	}
 
 	// Return the response with blockchain reference
-	for key, value := range dewsResponse.Headers {
+	for key, value := range response.Headers {
 		w.Header().Set(key, value)
 	}
 
@@ -393,7 +395,7 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// Write response body
-	w.WriteHeader(dewsResponse.StatusCode)
+	w.WriteHeader(response.StatusCode)
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(clientResponse); err != nil {
@@ -408,14 +410,14 @@ func (server *DeWSWebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 		"duration", totalTime)
 
 	server.logger.Info("=== RESULT ===",
-		dewsTransaction.Request.Path,
-		dewsTransaction.Request.Method,
-		dewsTransaction.Request.Body,
+		transaction.Request.Path,
+		transaction.Request.Method,
+		transaction.Request.Body,
 	)
 }
 
 // handleTransactionStatus returns the status of a transaction
-func (server *DeWSWebServer) handleTransactionStatus(w http.ResponseWriter, r *http.Request) {
+func (server *WebServer) handleTransactionStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -453,19 +455,21 @@ func (server *DeWSWebServer) handleTransactionStatus(w http.ResponseWriter, r *h
 	}
 }
 
+//? Helper Functions
+
 // checkTransactionStatus checks the status of a transaction in the blockchain
-func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionStatus, error) {
+func (server *WebServer) checkTransactionStatus(txID string) (*TransactionStatus, error) {
 	// Query the blockchain for the transaction
+	server.logger.Info("WEBSERVER CHECK TRANSACTION STATUS 1")
 	query := fmt.Sprintf("tx.hash='%s'", txID)
-	res, err := server.tendermintClient.TxSearch(context.Background(), query, false, nil, nil, "")
+	res, err := server.cometBftRpcClient.TxSearch(context.Background(), query, false, nil, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("error searching for transaction: %w", err)
 	}
 
 	consensusInfo := ConsensusInfo{
-		TotalNodes:     server.countPeers() + 1, // +1 for this node
-		AgreementNodes: 0,                       // We'll calculate this
-		NodeResponses:  make([]bool, 0),         // Track individual node responses
+		AgreementNodes: 0,               // We'll calculate this
+		NodeResponses:  make([]bool, 0), // Track individual node responses
 	}
 
 	if len(res.Txs) == 0 {
@@ -475,8 +479,8 @@ func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionSt
 	tx := res.Txs[0]
 
 	// Parse the transaction
-	var dewsTx service_registry.Transaction
-	err = json.Unmarshal(tx.Tx, &dewsTx)
+	var completeTx service_registry.Transaction
+	err = json.Unmarshal(tx.Tx, &completeTx)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing transaction: %w", err)
 	}
@@ -484,7 +488,6 @@ func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionSt
 	// Extract events
 	status := "pending"
 	for _, event := range tx.TxResult.Events {
-		server.logger.Info("=== EVENT ===", event.Type, event)
 		if event.Type == "tm.event.Vote" || event.Type == "vote" {
 			consensusInfo.AgreementNodes++
 			consensusInfo.NodeResponses = append(consensusInfo.NodeResponses, true)
@@ -498,29 +501,38 @@ func (server *DeWSWebServer) checkTransactionStatus(txID string) (*TransactionSt
 		}
 	}
 
+	block, err := server.cometBftRpcClient.Block(context.Background(), &tx.Height)
+	if err != nil {
+		return nil, fmt.Errorf("error getting block: %w", err)
+	}
+	if block.Block == nil {
+		server.logger.Info("Web Server", "Block not found")
+	}
+	server.logger.Info("Web Server", "Block", block)
+
 	// Create response info
 	responseInfo := ResponseInfo{
-		StatusCode:  dewsTx.Response.StatusCode,
-		ContentType: dewsTx.Response.Headers["Content-Type"],
-		BodyLength:  len(dewsTx.Response.Body),
+		StatusCode:  completeTx.Response.StatusCode,
+		ContentType: completeTx.Response.Headers["Content-Type"],
+		BodyLength:  len(completeTx.Response.Body),
 	}
 
 	// Create transaction status
 	txStatus := &TransactionStatus{
-		TxID:          txID,
-		RequestID:     dewsTx.Request.RequestID,
-		Status:        status,
-		BlockHeight:   tx.Height,
-		BlockHash:     fmt.Sprintf("%X", tx.Hash),
-		ConfirmTime:   time.Unix(0, time.Now().Unix()), // TODO
-		ResponseInfo:  responseInfo,
-		ConsensusInfo: consensusInfo,
+		TxID:              txID,
+		RequestID:         completeTx.Request.RequestID,
+		Status:            status,
+		BlockHeight:       tx.Height,
+		BlockHash:         fmt.Sprintf("%X", tx.Hash),
+		ConfirmTime:       time.Unix(0, time.Now().Unix()), // TODO
+		ResponseInfo:      responseInfo,
+		ConsensusInfo:     consensusInfo,
+		BlockData:         block.Block,
+		BlockTransactions: block.Block.Txs,
 	}
 
 	return txStatus, nil
 }
-
-//? Helper Functions
 
 // generateRequestID generates a unique request ID
 func generateRequestID() (string, error) {
@@ -543,7 +555,7 @@ func extractPortFromAddress(address string) string {
 }
 
 // countPeers counts the number of peers
-func (server *DeWSWebServer) countPeers() int {
+func (server *WebServer) countPeers() int {
 	server.peersMu.RLock()
 	defer server.peersMu.RUnlock()
 	return len(server.peers)

@@ -18,6 +18,7 @@ build-bin:
 	@mkdir -p ./build
 	@CGO_ENABLED=0 go build -o ./build/bin
 	@echo "Binary built at ./build/bin"
+	@chmod +x ./build/bin
 
 # Set up permissions for Docker
 allow-access:
@@ -54,22 +55,27 @@ dev-fast: docker-clean build-bin
 	@echo "Setting up for fast development with volume sharing..."
 	@if [ -d node-config ]; then sudo rm -rf node-config; fi
 	@echo "Generating compose and config for $(NODES) nodes in dev mode"
+ifeq ($(DEV), true)
 	@./setup-network.sh -n $(NODES) -e -m dev
+else
+	@./setup-network.sh -n $(NODES) -m dev
+endif
 	@echo "Starting containers with locally built binary..."
+	@docker-compose -f docker-compose.dev.yml down
 	@docker-compose -f docker-compose.dev.yml up -d
 	@echo "Development environment started with volume sharing"
 
-# Development using Docker image (1 node)
+# Development using Docker image (with N nodes)
 dev: build-docker-image-dev
-	@echo "Setting up single-node development environment..."
+	@echo "Setting up development environment with $(NODES) nodes..."
 	@if [ -d node-config ]; then sudo rm -rf node-config; fi
 	@echo "Run without empty block generation"
 	@./setup-network.sh -n $(NODES) -e -m dev
 	@echo "Clearing existing network..."
-	@docker-compose -p layer-1 down
+	@docker-compose -f docker-compose.dev.yml down
 	@echo "Composing development network..."
-	@docker-compose up -d
-	@echo "Development environment started with $(NODES) node"
+	@docker-compose -f docker-compose.dev.yml up -d
+	@echo "Development environment started with $(NODES) nodes"
 
 # Production run with multiple nodes
 prod: build-docker-image-prod
@@ -83,7 +89,7 @@ else
 	@./setup-network.sh -n $(NODES) -m prod
 endif
 	@echo "Clearing existing network..."
-	@docker-compose -p layer-1 down
+	@docker-compose down
 	@echo "Composing production network..."
 	@docker-compose up -d
 	@echo "Production environment started with $(NODES) nodes"

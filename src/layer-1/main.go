@@ -83,8 +83,8 @@ func main() {
 		}
 	}()
 
-	//? Create DeWS Application
-	dewsConfig := &app.AppConfig{
+	//? Create ABCI Application
+	appConfig := &app.AppConfig{
 		NodeID:        filepath.Base(homeDir), // Use directory name as node ID
 		RequiredVotes: 2,                      // For demo, 2 votes required
 		LogAllTxs:     true,
@@ -95,7 +95,7 @@ func main() {
 	serviceRegistry := service_registry.NewServiceRegistry(PostgresDB, logger, isByzantine)
 	serviceRegistry.RegisterDefaultServices()
 
-	app := app.NewDeWSApplication(db, serviceRegistry, dewsConfig, logger, PostgresDB)
+	app := app.NewABCIApplication(db, serviceRegistry, appConfig, logger, PostgresDB)
 
 	//? Private Validator
 	pv := privval.LoadFilePV(
@@ -140,8 +140,8 @@ func main() {
 		node.Wait()
 	}()
 
-	//? Start DeWS Web Server
-	webserver, err := server.NewDeWSWebServer(app, httpPort, logger, node, serviceRegistry, PostgresDB)
+	//? Start Web Server
+	webserver, err := server.NewWebServer(app, httpPort, logger, node, serviceRegistry, PostgresDB)
 	if err != nil {
 		log.Fatalf("Creating web server: %v", err)
 	}
@@ -170,7 +170,7 @@ func main() {
 
 func ConnectDB() {
 	var err error
-	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/dewsdb", postgresHost)
+	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/postgres", postgresHost)
 	log.Printf("Connecting to: %s\n", dsn)
 
 	for i := 0; i < 10; i++ {
