@@ -4,7 +4,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/ahmadzakiakmal/thesis/src/layer-2/database/models"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -33,5 +32,4 @@ func (dbSvc *DatabaseService) Connect() {
 		}
 		dbSvc.DB = DB
 	}
-	dbSvc.DB.AutoMigrate(&models.User{})
 }
