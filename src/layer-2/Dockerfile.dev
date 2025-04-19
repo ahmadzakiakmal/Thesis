@@ -1,0 +1,13 @@
+FROM alpine:latest
+
+# Install necessary packages
+RUN apk --no-cache add ca-certificates bash curl jq
+
+# Set working directory
+WORKDIR /app
+
+# The binary will be mounted as a volume during development
+# This allows for quick updates without rebuilding the image
+
+# Command to run when container starts
+CMD ["/app/bin"]

@@ -64,6 +64,7 @@ func main() {
 	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/postgres", postgresHost)
 	database := database.NewDatabaseService(dsn)
 	database.Connect()
+	database.Migrate()
 	postgresDB := database.DB
 	log.Printf("Connecting to: %s\n", dsn)
 

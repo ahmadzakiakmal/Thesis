@@ -4,6 +4,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/ahmadzakiakmal/thesis/src/layer-2/database/models"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -32,4 +33,27 @@ func (dbSvc *DatabaseService) Connect() {
 		}
 		dbSvc.DB = DB
 	}
+}
+
+func (dbSvc *DatabaseService) Migrate() {
+	// Migrate existing User model
+	dbSvc.DB.AutoMigrate(&models.User{})
+
+	// Migrate all supply chain system models
+	dbSvc.DB.AutoMigrate(
+		&models.User{}, // This one is for testing only
+		&models.Session{},
+		&models.Operator{},
+		&models.Supplier{},
+		&models.Package{},
+		&models.Item{},
+		&models.ItemCatalog{},
+		&models.QCRecord{},
+		&models.Label{},
+		&models.Courier{},
+		&models.Transaction{},
+	)
+
+	// Log migration completion
+	log.Println("Database migration completed successfully")
 }
