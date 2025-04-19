@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/app"
-	"github.com/ahmadzakiakmal/thesis/src/layer-2/database"
+	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository"
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/server"
 	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/service-registry"
 	cfg "github.com/cometbft/cometbft/config"
@@ -62,9 +62,10 @@ func main() {
 
 	// Connect Postgresql DB
 	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/postgres", postgresHost)
-	database := database.NewDatabaseService(dsn)
+	database := repository.NewDatabaseService(dsn)
 	database.Connect()
 	database.Migrate()
+	database.Seed()
 	postgresDB := database.DB
 	log.Printf("Connecting to: %s\n", dsn)
 

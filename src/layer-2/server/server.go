@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -39,16 +40,17 @@ type WebServer struct {
 
 // TransactionStatus represents the consensus status of a transaction
 type TransactionStatus struct {
-	TxID              string        `json:"tx_id"`
-	RequestID         string        `json:"request_id"`
-	Status            string        `json:"status"`
-	BlockHeight       int64         `json:"block_height"`
-	BlockHash         string        `json:"block_hash,omitempty"`
-	ConfirmTime       time.Time     `json:"confirm_time"`
-	ResponseInfo      ResponseInfo  `json:"response_info"`
-	ConsensusInfo     ConsensusInfo `json:"consensus_info"`
-	BlockData         interface{}   `json:"block"`
-	BlockTransactions interface{}   `json:"block_transactions"`
+	TxID         string       `json:"tx_id"`
+	RequestID    string       `json:"request_id"`
+	Status       string       `json:"status"`
+	BlockHeight  int64        `json:"block_height"`
+	BlockHash    string       `json:"block_hash,omitempty"`
+	ConfirmTime  time.Time    `json:"confirm_time"`
+	ResponseInfo ResponseInfo `json:"response_info"`
+	// ConsensusInfo     ConsensusInfo `json:"consensus_info"`
+	// BlockData         interface{}   `json:"block"`
+	BlockTransactions    []service_registry.Transaction `json:"block_transactions"`
+	BlockTransactionsB64 []string                       `json:"block_transactions_b64"`
 }
 
 // ResponseInfo contains information about the response
@@ -68,10 +70,10 @@ type ConsensusInfo struct {
 
 // ClientResponse is the response format sent to clients
 type ClientResponse struct {
-	StatusCode    int               `json:"-"` // Not included in JSON
-	Headers       map[string]string `json:"-"` // Not included in JSON
-	Body          string            `json:"body,omitempty"`
-	BodyCustom    interface{}       `json:"body_custom"`
+	StatusCode int               `json:"-"` // Not included in JSON
+	Headers    map[string]string `json:"-"` // Not included in JSON
+	// Body          string            `json:"body,omitempty"`
+	Body          interface{}       `json:"body"`
 	Meta          TransactionStatus `json:"meta"`
 	BlockchainRef string            `json:"blockchain_ref"`
 	NodeID        string            `json:"node_id"`
@@ -121,29 +123,31 @@ func NewWebServer(app *app.Application, httpPort string, logger cmtlog.Logger, n
 	mux.HandleFunc("/debug", server.handleDebug)
 	mux.HandleFunc("/api/", server.handleAPI)
 	mux.HandleFunc("/status/", server.handleTransactionStatus)
+	// Session Endpoints
+	mux.HandleFunc("/session/", server.handleSessionAPI)
 
 	return server, nil
 }
 
 // Start starts the web server
-func (server *WebServer) Start() error {
-	server.logger.Info("Starting web server", "addr", server.httpAddr)
+func (ws *WebServer) Start() error {
+	ws.logger.Info("Starting web server", "addr", ws.httpAddr)
 	go func() {
-		if err := server.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			server.logger.Error("web server error: ", "err", err)
+		if err := ws.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			ws.logger.Error("web server error: ", "err", err)
 		}
 	}()
 	return nil
 }
 
 // Shutdown gracefully shuts down the web server
-func (server *WebServer) Shutdown(ctx context.Context) error {
-	server.logger.Info("Shutting down web server")
-	return server.server.Shutdown(ctx)
+func (ws *WebServer) Shutdown(ctx context.Context) error {
+	ws.logger.Info("Shutting down web server")
+	return ws.server.Shutdown(ctx)
 }
 
 // handleRoot handles the root endpoint which shows node status
-func (server *WebServer) handleRoot(w http.ResponseWriter, r *http.Request) {
+func (ws *WebServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -152,14 +156,14 @@ func (server *WebServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
 	w.Write([]byte("<h1>Session Aware Consensus Simulator Node</h1>"))
-	w.Write([]byte("<p>Node ID: " + string(server.node.NodeInfo().ID()) + "</p>"))
-	rpcPort := extractPortFromAddress(server.node.Config().RPC.ListenAddress)
+	w.Write([]byte("<p>Node ID: " + string(ws.node.NodeInfo().ID()) + "</p>"))
+	rpcPort := extractPortFromAddress(ws.node.Config().RPC.ListenAddress)
 	rpcAddrHtml := fmt.Sprintf("<p>RPC Address: <a href=\"http://localhost:%s\">http://localhost:%s</a>", rpcPort, rpcPort)
 	w.Write([]byte(rpcAddrHtml))
 }
 
 // handleDebug provides debugging information
-func (server *WebServer) handleDebug(w http.ResponseWriter, r *http.Request) {
+func (ws *WebServer) handleDebug(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -167,24 +171,24 @@ func (server *WebServer) handleDebug(w http.ResponseWriter, r *http.Request) {
 
 	// Collect debug information
 	nodeStatus := "online"
-	if server.node.ConsensusReactor().WaitSync() {
+	if ws.node.ConsensusReactor().WaitSync() {
 		nodeStatus = "syncing"
 	}
-	if !server.node.IsListening() {
+	if !ws.node.IsListening() {
 		nodeStatus = "offline"
 	}
 
 	debugInfo := map[string]interface{}{
-		"node_id":     string(server.node.NodeInfo().ID()),
+		"node_id":     string(ws.node.NodeInfo().ID()),
 		"node_status": nodeStatus,
-		"p2p_address": server.node.Config().P2P.ListenAddress,
-		"rpc_address": server.node.Config().RPC.ListenAddress,
-		"uptime":      time.Since(server.startTime).String(),
+		"p2p_address": ws.node.Config().P2P.ListenAddress,
+		"rpc_address": ws.node.Config().RPC.ListenAddress,
+		"uptime":      time.Since(ws.startTime).String(),
 	}
 
 	// Get Tendermint status
-	status, err := server.cometBftRpcClient.Status(context.Background())
-	outboundPeers, inboundPeers, dialingPeers := server.node.Switch().NumPeers()
+	status, err := ws.cometBftRpcClient.Status(context.Background())
+	outboundPeers, inboundPeers, dialingPeers := ws.node.Switch().NumPeers()
 	debugInfo["num_peers_out"] = outboundPeers
 	debugInfo["num_peers_in"] = inboundPeers
 	debugInfo["num_peers_dialing"] = dialingPeers
@@ -196,12 +200,12 @@ func (server *WebServer) handleDebug(w http.ResponseWriter, r *http.Request) {
 		debugInfo["latest_block_time"] = status.SyncInfo.LatestBlockTime
 		debugInfo["catching_up"] = status.SyncInfo.CatchingUp
 
-		peers := make([]map[string]interface{}, 0, len(server.node.Switch().Peers().Copy()))
+		peers := make([]map[string]interface{}, 0, len(ws.node.Switch().Peers().Copy()))
 		debugInfo["peers"] = peers
 	}
 
 	// Add ABCI info
-	abciInfo, err := server.cometBftRpcClient.ABCIInfo(context.Background())
+	abciInfo, err := ws.cometBftRpcClient.ABCIInfo(context.Background())
 	if err != nil {
 		debugInfo["abci_error"] = err.Error()
 	} else {
@@ -222,7 +226,7 @@ func (server *WebServer) handleDebug(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAPI handles API requests using the protocol
-func (server *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
+func (ws *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
 	// Check if consensus should be used
@@ -233,32 +237,33 @@ func (server *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	requestID, err := generateRequestID()
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		server.logger.Error("Failed to generate request ID", "err", err)
+		ws.logger.Error("Failed to generate request ID", "err", err)
 		return
 	}
 
 	// Convert HTTP request to Request
-	request, err := service_registry.ConvertHttpRequestToRequest(r, requestID)
+	request, err := service_registry.ConvertHttpRequestToConsensusRequest(r, requestID)
 	if err != nil {
 		http.Error(w, "Failed to process request: "+err.Error(), http.StatusBadRequest)
-		server.logger.Error("Failed to convert HTTP request", "err", err)
+		ws.logger.Error("Failed to convert HTTP request", "err", err)
 		return
 	}
+	request.GenerateRequestID()
 
 	// Generate response locally by processing the request
-	response, err := request.GenerateResponse(server.serviceRegistry)
+	response, err := request.GenerateResponse(ws.serviceRegistry)
 	if err != nil {
 		http.Error(w, "Failed to process request: "+err.Error(), http.StatusInternalServerError)
-		server.logger.Error("Failed to generate response", "err", err)
+		ws.logger.Error("Failed to generate response", "err", err)
 		return
 	}
 
 	localProcessTime := time.Since(startTime)
-	server.logger.Info("Local processing time", "duration", localProcessTime)
+	ws.logger.Info("Local processing time", "duration", localProcessTime)
 
 	// If consensus is disabled, return response immediately
 	if !withConsensus {
-		server.logger.Info("Skipping consensus", "path", r.URL.Path)
+		ws.logger.Info("Skipping consensus", "path", r.URL.Path)
 
 		// Write the response headers
 		for key, value := range response.Headers {
@@ -273,7 +278,7 @@ func (server *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	transaction := &service_registry.Transaction{
 		Request:      *request,
 		Response:     *response,
-		OriginNodeID: string(server.node.ConsensusReactor().Switch.NodeInfo().ID()),
+		OriginNodeID: string(ws.node.ConsensusReactor().Switch.NodeInfo().ID()),
 		BlockHeight:  0, // Will be filled by the consensus process
 	}
 
@@ -281,45 +286,44 @@ func (server *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	txBytes, err := transaction.SerializeToBytes()
 	if err != nil {
 		http.Error(w, "Failed to serialize transaction: "+err.Error(), http.StatusInternalServerError)
-		server.logger.Error("Failed to serialize transaction", "err", err)
+		ws.logger.Error("Failed to serialize transaction", "err", err)
 		return
 	}
 
 	// Broadcast transaction and wait for commitment
 	consensusStart := time.Now()
-	tendermintResponse, err := server.cometBftRpcClient.BroadcastTxCommit(context.Background(), txBytes)
+	consensusResponse, err := ws.cometBftRpcClient.BroadcastTxCommit(context.Background(), txBytes)
 	consensusTime := time.Since(consensusStart)
-	server.logger.Info("Consensus time", "duration", consensusTime)
+	ws.logger.Info("Consensus time", "duration", consensusTime)
 
-	if tendermintResponse.CheckTx.GetCode() != 0 {
-		code := strconv.Itoa(int(tendermintResponse.CheckTx.Code))
+	if consensusResponse.CheckTx.GetCode() != 0 {
+		code := strconv.Itoa(int(consensusResponse.CheckTx.Code))
 		http.Error(w, "Consensus error with code "+code+": "+err.Error(), http.StatusInternalServerError)
-		server.logger.Error("Failed to broadcast transaction", "err", err)
+		ws.logger.Error("Failed to broadcast transaction", "err", err)
 		return
 	}
 
 	if err != nil {
 		http.Error(w, "Consensus error: "+err.Error(), http.StatusInternalServerError)
-		server.logger.Error("Failed to broadcast transaction", "err", err)
+		ws.logger.Error("Failed to broadcast transaction", "err", err)
 		return
 	}
 
 	// Update the transaction with the block height from the response
-	blockHeight := tendermintResponse.Height
+	blockHeight := consensusResponse.Height
 	transaction.BlockHeight = blockHeight
 
 	// Create a client response with metadata
 	clientResponse := ClientResponse{
 		StatusCode: response.StatusCode,
 		Headers:    response.Headers,
-		Body:       response.Body,
-		BodyCustom: response.BodyCustom,
+		Body:       response.ParseBody(),
 		Meta: TransactionStatus{
-			TxID:        hex.EncodeToString(tendermintResponse.Hash),
+			TxID:        hex.EncodeToString(consensusResponse.Hash),
 			RequestID:   requestID,
 			Status:      "confirmed",
 			BlockHeight: blockHeight,
-			BlockHash:   hex.EncodeToString(tendermintResponse.Hash),
+			BlockHash:   hex.EncodeToString(consensusResponse.Hash),
 			ConfirmTime: time.Now(),
 			ResponseInfo: ResponseInfo{
 				StatusCode:  response.StatusCode,
@@ -327,7 +331,7 @@ func (server *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 				BodyLength:  len(response.Body),
 			},
 		},
-		BlockchainRef: fmt.Sprintf("/status/%s", hex.EncodeToString(tendermintResponse.Hash)),
+		BlockchainRef: fmt.Sprintf("/status/%s", hex.EncodeToString(consensusResponse.Hash)),
 		NodeID:        transaction.OriginNodeID,
 	}
 
@@ -344,25 +348,27 @@ func (server *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(clientResponse); err != nil {
-		server.logger.Error("Failed to encode client response", "err", err)
+		ws.logger.Error("Failed to encode client response", "err", err)
 	}
 
 	totalTime := time.Since(startTime)
-	server.logger.Info("Total request time",
+	ws.logger.Info("Total request time",
 		"path", r.URL.Path,
 		"method", r.Method,
 		"withConsensus", withConsensus,
 		"duration", totalTime)
 
-	server.logger.Info("=== RESULT ===",
+	ws.logger.Info("=== Req-Res Pair Result ===",
 		transaction.Request.Path,
 		transaction.Request.Method,
 		transaction.Request.Body,
+		transaction.Response.StatusCode,
+		transaction.Response.Body,
 	)
 }
 
 // handleTransactionStatus returns the status of a transaction
-func (server *WebServer) handleTransactionStatus(w http.ResponseWriter, r *http.Request) {
+func (ws *WebServer) handleTransactionStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -378,7 +384,7 @@ func (server *WebServer) handleTransactionStatus(w http.ResponseWriter, r *http.
 	txID := pathParts[2]
 
 	// Check transaction status
-	status, err := server.checkTransactionStatus(txID)
+	status, err := ws.checkTransactionStatus(txID)
 	if err != nil {
 		http.Error(w, "Error checking transaction status: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -400,12 +406,109 @@ func (server *WebServer) handleTransactionStatus(w http.ResponseWriter, r *http.
 	}
 }
 
+// handleSessionAPI handels API requests regarding supply chain session
+func (ws *WebServer) handleSessionAPI(w http.ResponseWriter, r *http.Request) {
+	requestID, err := generateRequestID()
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		ws.logger.Error("Failed to generate request ID", "err", err)
+		return
+	}
+
+	request, err := service_registry.ConvertHttpRequestToConsensusRequest(r, requestID)
+	if err != nil {
+		http.Error(w, "Failed to process request: "+err.Error(), http.StatusUnprocessableEntity)
+		ws.logger.Error("Failed to convert HTTP request", "err", err)
+		return
+	}
+
+	response, err := request.GenerateResponse(ws.serviceRegistry)
+	if err != nil {
+		http.Error(w, "Failed to process request: "+err.Error(), http.StatusUnprocessableEntity)
+		ws.logger.Error("Failed to generate response", "err", err)
+		return
+	}
+
+	transaction := &service_registry.Transaction{
+		Request:      *request,
+		Response:     *response,
+		OriginNodeID: string(ws.node.ConsensusReactor().Switch.NodeInfo().ID()),
+	}
+
+	txBytes, err := transaction.SerializeToBytes()
+	if err != nil {
+		http.Error(w, "Failed to serialize transaction: "+err.Error(), http.StatusInternalServerError)
+		ws.logger.Error("Failed to serialize transaction", "err", err)
+		return
+	}
+
+	// Simulate transaction
+	consensusResponse, err := ws.cometBftRpcClient.BroadcastTxCommit(context.Background(), txBytes)
+	if consensusResponse.CheckTx.GetCode() != 0 {
+		code := strconv.Itoa(int(consensusResponse.CheckTx.Code))
+		http.Error(w, "Consensus error with code "+code+": "+err.Error(), http.StatusInternalServerError)
+		ws.logger.Error("Failed to broadcast transaction", "err", err)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Consensus error: "+err.Error(), http.StatusInternalServerError)
+		ws.logger.Error("Failed to broadcast transaction", "err", err)
+		return
+	}
+
+	// Add block height info to consensus transaction
+	blockHeight := consensusResponse.Height
+	transaction.BlockHeight = blockHeight
+
+	// Respond to client
+	apiResponse := ClientResponse{
+		StatusCode: response.StatusCode,
+		Headers:    response.Headers,
+		Body:       response.ParseBody(),
+		Meta: TransactionStatus{
+			TxID:        hex.EncodeToString(consensusResponse.Hash),
+			RequestID:   requestID,
+			Status:      "confirmed",
+			BlockHeight: blockHeight,
+			BlockHash:   hex.EncodeToString(consensusResponse.Hash),
+			ConfirmTime: time.Now(),
+			ResponseInfo: ResponseInfo{
+				StatusCode:  response.StatusCode,
+				ContentType: response.Headers["Content-Type"],
+				BodyLength:  len(response.Body),
+			},
+		},
+		NodeID: transaction.OriginNodeID,
+	}
+
+	for key, value := range response.Headers {
+		w.Header().Set(key, value)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	err = encoder.Encode(apiResponse)
+	if err != nil {
+		ws.logger.Error("Failed to encode client response", "err", err)
+	}
+
+	ws.logger.Info("=== Req-Res Pair Result ===",
+		transaction.Request.Path,
+		transaction.Request.Method,
+		transaction.Request.Body,
+		transaction.Response.StatusCode,
+		transaction.Response.Body,
+	)
+}
+
 // checkTransactionStatus checks the status of a transaction in the blockchain
-func (server *WebServer) checkTransactionStatus(txID string) (*TransactionStatus, error) {
+func (ws *WebServer) checkTransactionStatus(txID string) (*TransactionStatus, error) {
 	// Query the blockchain for the transaction
-	server.logger.Info("WEBSERVER CHECK TRANSACTION STATUS 1")
+	ws.logger.Info("WEBSERVER CHECK TRANSACTION STATUS 1")
 	query := fmt.Sprintf("tx.hash='%s'", txID)
-	res, err := server.cometBftRpcClient.TxSearch(context.Background(), query, false, nil, nil, "")
+	res, err := ws.cometBftRpcClient.TxSearch(context.Background(), query, false, nil, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("error searching for transaction: %w", err)
 	}
@@ -444,14 +547,14 @@ func (server *WebServer) checkTransactionStatus(txID string) (*TransactionStatus
 		}
 	}
 
-	block, err := server.cometBftRpcClient.Block(context.Background(), &tx.Height)
+	block, err := ws.cometBftRpcClient.Block(context.Background(), &tx.Height)
 	if err != nil {
 		return nil, fmt.Errorf("error getting block: %w", err)
 	}
 	if block.Block == nil {
-		server.logger.Info("Web Server", "Block not found")
+		ws.logger.Info("Web Server", "Block not found")
 	}
-	server.logger.Info("Web Server", "Block", block)
+	ws.logger.Info("Web Server", "Block", block)
 
 	// Create response info
 	responseInfo := ResponseInfo{
@@ -460,24 +563,40 @@ func (server *WebServer) checkTransactionStatus(txID string) (*TransactionStatus
 		BodyLength:  len(completeTx.Response.Body),
 	}
 
+	var blockTransactionsB64 []string
+	var blockTransactions []service_registry.Transaction
+	for _, tx := range block.Block.Txs {
+		// Convert the transaction bytes to base64
+		b64Tx := base64.StdEncoding.EncodeToString(tx)
+		blockTransactionsB64 = append(blockTransactionsB64, b64Tx)
+
+		// Try to parse the transaction
+		var parsedTx service_registry.Transaction
+		if err := json.Unmarshal(tx, &parsedTx); err == nil {
+			parsedTx.Response.BodyInterface = parsedTx.Response.ParseBody()
+			blockTransactions = append(blockTransactions, parsedTx)
+		} else {
+			// If parsing fails, you might want to log the error
+			ws.logger.Error("Failed to parse transaction", "err", err)
+		}
+	}
+
 	// Create transaction status
 	txStatus := &TransactionStatus{
-		TxID:              txID,
-		RequestID:         completeTx.Request.RequestID,
-		Status:            status,
-		BlockHeight:       tx.Height,
-		BlockHash:         fmt.Sprintf("%X", tx.Hash),
-		ConfirmTime:       time.Unix(0, time.Now().Unix()), // TODO
-		ResponseInfo:      responseInfo,
-		ConsensusInfo:     consensusInfo,
-		BlockData:         block.Block,
-		BlockTransactions: block.Block.Txs,
+		TxID:                 txID,
+		RequestID:            completeTx.Request.RequestID,
+		Status:               status,
+		BlockHeight:          tx.Height,
+		BlockHash:            fmt.Sprintf("%X", tx.Hash),
+		ConfirmTime:          time.Unix(0, time.Now().Unix()), // TODO
+		ResponseInfo:         responseInfo,
+		BlockTransactions:    blockTransactions,
+		BlockTransactionsB64: blockTransactionsB64,
 	}
 
 	return txStatus, nil
 }
 
-// generateRequestID generates a unique request ID
 func generateRequestID() (string, error) {
 	bytes := make([]byte, 16)
 	_, err := rand.Read(bytes)

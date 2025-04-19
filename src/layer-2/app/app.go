@@ -218,11 +218,40 @@ func (app *Application) CheckTx(_ context.Context, check *abcitypes.CheckTxReque
 
 	// Log the raw bytes in various formats
 	app.logger.Info("CheckTx raw transaction",
-		"length", len(tx),
-		// "raw_bytes", fmt.Sprintf("%v", tx),
 		"as_string", string(tx),
-		// "hex", fmt.Sprintf("%X", tx),
 	)
+
+	var consensusTx service_registry.Transaction
+	if err := json.Unmarshal(tx, &consensusTx); err != nil {
+		app.logger.Error("Failed to parse transaction",
+			"error", err.Error(),
+		)
+		return &abcitypes.CheckTxResponse{
+			Code: 1, // Non-zero means error
+			Log:  fmt.Sprintf("Invalid transaction format: %v", err),
+		}, nil
+	}
+
+	app.logger.Info("Parsed transaction",
+		"request_method", consensusTx.Request.Method,
+		"request_path", consensusTx.Request.Path,
+		"request_id", consensusTx.Request.RequestID,
+		"origin_node", consensusTx.OriginNodeID,
+	)
+
+	if consensusTx.Response.StatusCode == 0 {
+		return &abcitypes.CheckTxResponse{
+			Code: 2,
+			Log:  "Invalid response status code",
+		}, fmt.Errorf("invalid response status code")
+	}
+
+	if consensusTx.Request.RequestID == "" || consensusTx.OriginNodeID == "" {
+		return &abcitypes.CheckTxResponse{
+			Code: 2,
+			Log:  "Missing required fields in transaction",
+		}, fmt.Errorf("missing required fields in transaction")
+	}
 
 	// Accept any transaction for now
 	return &abcitypes.CheckTxResponse{Code: 0}, nil

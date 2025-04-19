@@ -1,17 +1,21 @@
 package service_registry
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 
+	"encoding/hex"
 	"encoding/json"
 	"time"
 
-	"github.com/ahmadzakiakmal/thesis/src/layer-2/database/models"
+	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository"
+	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository/models"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
+	"github.com/lib/pq"
 	"gorm.io/gorm"
 )
 
@@ -26,13 +30,46 @@ type Request struct {
 	Timestamp  time.Time         `json:"timestamp"`
 }
 
+// GenerateRequestID generates a deterministic ID for the request
+func (r *Request) GenerateRequestID() {
+	hasher := sha256.New()
+	hasher.Write([]byte(fmt.Sprintf("%s-%s-%s-%s", r.Path, r.Method, r.Body, r.Timestamp)))
+	r.RequestID = hex.EncodeToString(hasher.Sum(nil)[:16])
+}
+
 // Response represents the computed response from a server
 type Response struct {
-	StatusCode int               `json:"status_code"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
-	Error      string            `json:"error,omitempty"`
-	BodyCustom interface{}       `json:"body_custom"`
+	StatusCode    int               `json:"status_code"`
+	Headers       map[string]string `json:"headers"`
+	Body          string            `json:"body"`
+	Error         string            `json:"error,omitempty"`
+	BodyInterface interface{}       `json:"body_interface"`
+}
+
+// ParseBody attempts to parse the Response's Body field as JSON
+// and returns the structured data or nil if parsing fails.
+func (r *Response) ParseBody() interface{} {
+	// If Body is empty, return nil
+	if r.Body == "" {
+		return nil
+	}
+
+	// First try to unmarshal into a map (JSON object)
+	var bodyMap map[string]interface{}
+	err := json.Unmarshal([]byte(r.Body), &bodyMap)
+	if err == nil {
+		return bodyMap
+	}
+
+	// If that fails, try as a JSON array
+	var bodyArray []interface{}
+	err = json.Unmarshal([]byte(r.Body), &bodyArray)
+	if err == nil {
+		return bodyArray
+	}
+
+	// If not valid JSON, return nil
+	return nil
 }
 
 // Transaction represents a complete transaction, pairing the Request and the Response
@@ -67,8 +104,8 @@ func (t *Transaction) SerializeToBytes() ([]byte, error) {
 	return json.Marshal(t)
 }
 
-// ConvertHttpRequestToRequest converts an http.Request to Request
-func ConvertHttpRequestToRequest(r *http.Request, requestID string) (*Request, error) {
+// ConvertHttpRequestToConsensusRequest converts an http.Request to Request
+func ConvertHttpRequestToConsensusRequest(r *http.Request, requestID string) (*Request, error) {
 	// Extract headers
 	headers := make(map[string]string)
 	for name, values := range r.Header {
@@ -179,6 +216,7 @@ func matchPath(pattern, path string) bool {
 
 // RegisterDefaultServices sets up the default services for the BFT system
 func (sr *ServiceRegistry) RegisterDefaultServices() {
+	// The original DeWS endpoints, for baseline testing only
 	sr.RegisterHandler("POST", "/api/customers", true, func(req *Request) (*Response, error) {
 		var newUser models.User
 		err := json.Unmarshal([]byte(req.Body), &newUser)
@@ -241,27 +279,115 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 			}, err
 		}
 		return &Response{
-			StatusCode: http.StatusOK,
-			Headers:    map[string]string{"Content-Type": "application/json"},
-			Body:       string(jsonBytes),
-			BodyCustom: customers,
+			StatusCode:    http.StatusOK,
+			Headers:       map[string]string{"Content-Type": "application/json"},
+			Body:          string(jsonBytes),
+			BodyInterface: customers,
 		}, nil
 	})
 
-	// Additional routes can be added here
+	// Endpoints
+
+	// Create Session Endpoint
+	type startSessionBody struct {
+		OperatorID string `json:"operator_id"`
+	}
+	sr.RegisterHandler("POST", "/session/start", true, func(req *Request) (*Response, error) {
+		sessionID := fmt.Sprintf("SESSION-%s", req.RequestID)
+		// operatorID := "OPR-001" // TODO: get from request
+		var body startSessionBody
+		err := json.Unmarshal([]byte(req.Body), &body)
+		if err != nil {
+			sr.logger.Info("Failed to parse body", "error", err.Error())
+			return &Response{
+				StatusCode: http.StatusUnprocessableEntity,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       fmt.Sprintf(`{"error":"Failed to create session: %s"}`, err.Error()),
+			}, err
+		}
+
+		operatorID := body.OperatorID
+		if operatorID == "" {
+			return &Response{
+				StatusCode: http.StatusBadRequest,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       `{"error":"operator ID is required"}`,
+			}, err
+		}
+		session := models.Session{
+			ID:          sessionID,
+			Status:      "active",
+			IsCommitted: false,
+			OperatorID:  operatorID,
+		}
+
+		dbTx := sr.database.Begin()
+		err = dbTx.Create(&session).Error
+		if err != nil {
+			dbTx.Rollback()
+			if pqErr, ok := err.(*pq.Error); ok {
+				switch pqErr.Code {
+				case repository.PgErrForeignKeyViolation: // foreign_key_violation
+					return &Response{
+						StatusCode: http.StatusBadRequest,
+						Headers:    map[string]string{"Content-Type": "application/json"},
+						Body:       fmt.Sprintf(`{"error":"Invalid reference: %s"}`, pqErr.Detail),
+					}, fmt.Errorf("foreign key violation: %v", pqErr.Detail)
+
+				case repository.PgErrUniqueViolation: // unique_violation
+					return &Response{
+						StatusCode: http.StatusConflict,
+						Headers:    map[string]string{"Content-Type": "application/json"},
+						Body:       fmt.Sprintf(`{"error":"Record already exists: %s"}`, pqErr.Detail),
+					}, fmt.Errorf("unique violation: %v", pqErr.Detail)
+
+				default:
+					return &Response{
+						StatusCode: http.StatusInternalServerError,
+						Headers:    map[string]string{"Content-Type": "application/json"},
+						Body:       fmt.Sprintf(`{"error":"Database error: %s (Code: %s)"}`, pqErr.Message, pqErr.Code),
+					}, fmt.Errorf("database error: %v", err)
+				}
+			}
+			return &Response{
+				StatusCode: http.StatusInternalServerError,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       fmt.Sprintf(`{"error":"Failed to create session: %s"}`, err.Error()),
+			}, err
+		}
+
+		err = dbTx.Commit().Error
+		if err != nil {
+			sr.logger.Info("Failed to commit session transaction", "error", err.Error())
+			return &Response{
+				StatusCode: http.StatusInternalServerError,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       fmt.Sprintf(`{"error":"Failed to create session: %s"}`, err.Error()),
+			}, err
+		}
+
+		return &Response{
+			StatusCode: http.StatusCreated, // or http.StatusOK
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       fmt.Sprintf(`{"message":"Session generated","id":"%s"}`, sessionID),
+		}, nil
+	})
 }
 
 // GenerateResponse executes the request and generates a response
 func (req *Request) GenerateResponse(services *ServiceRegistry) (*Response, error) {
 	// Find the appropriate service handler for this request
 	handler, found := services.GetHandlerForPath(req.Method, req.Path)
+	log.Println("matching service registry handler...")
 	if !found {
+		log.Println("service registry handler not found")
 		return &Response{
 			StatusCode: http.StatusNotFound,
 			Headers:    map[string]string{"Content-Type": "text/plain"},
 			Body:       fmt.Sprintf("Service not found for %s %s", req.Method, req.Path),
 		}, nil
 	}
+	log.Println("service registry found")
 
 	// Execute the handler
 	response, err := handler(req)

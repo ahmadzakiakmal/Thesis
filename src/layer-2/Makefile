@@ -58,6 +58,7 @@ dev-fast: docker-clean build-bin
 	@if [ -d node-config ]; then sudo rm -rf node-config; fi
 	@echo "Generating compose and config for $(NODES) nodes in dev mode"
 ifeq ($(DEV), true)
+	@echo "Empty block generation turned off"
 	@./setup-network.sh -n $(NODES) -e -m dev
 else
 	@./setup-network.sh -n $(NODES) -m dev
