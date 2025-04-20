@@ -3,7 +3,7 @@ package models
 // Package represents physical packages being processed
 type Package struct {
 	ID             string    `gorm:"column:package_id;primaryKey;type:varchar(50)"`
-	SessionID      *string   `gorm:"column:session_id;type:varchar(50);index"`
+	SessionID      *string   `gorm:"column:session_id;type:varchar(50);index;unique"`
 	Session        *Session  `gorm:"foreignKey:SessionID"`
 	SupplierID     string    `gorm:"column:supplier_id;type:varchar(50);index"`
 	Supplier       *Supplier `gorm:"foreignKey:SupplierID"`

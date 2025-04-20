@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -323,6 +326,7 @@ func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, 
 	return &pkg, nil
 }
 
+// ValidatePackage validates the supplier's signature
 func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID string) (*models.Package, *DBError) {
 	dbTx := r.DB.Begin()
 
@@ -369,4 +373,127 @@ func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID str
 	}
 
 	return &pkg, nil
+}
+
+// QualityCheck adds a QC Record to a Package
+func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string) (*models.Package, *models.QCRecord, *DBError) {
+	dbTx := r.DB.Begin()
+
+	var session models.Session
+	err := dbTx.Where("session_id = ?", sessionID).First(&session).Error
+	if err != nil {
+		dbTx.Rollback()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, &DBError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "Session does not exist",
+				Detail:  fmt.Sprintf("Session with id %s does not exist", sessionID),
+			}
+		}
+		return nil, nil, &DBError{
+			Code:    "DATABASE_ERROR",
+			Message: "Database error",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Find the package by ID
+	var pkg models.Package
+	err = dbTx.Preload("Items").Where("session_id = ?", sessionID).First(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, &DBError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "Package does not exist",
+				Detail:  fmt.Sprintf("Package associated with session %s does not exist", sessionID),
+			}
+		}
+		return nil, nil, &DBError{
+			Code:    "DATABASE_ERROR",
+			Message: "Database error",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Ensure package status is appropriate for QC
+	if pkg.Status != "validated" {
+		dbTx.Rollback()
+		return nil, nil, &DBError{
+			Code:    "INVALID_STATE",
+			Message: "Package is not ready for QC",
+			Detail:  fmt.Sprintf("Package status is %s, must be 'validated'", pkg.Status),
+		}
+	}
+
+	// Convert issues slice to string for storage
+	issuesStr := ""
+	if len(issues) > 0 {
+		issuesBytes, err := json.Marshal(issues)
+		if err != nil {
+			dbTx.Rollback()
+			return nil, nil, &DBError{
+				Code:    "MARSHALING_ERROR",
+				Message: "Failed to process issues data",
+				Detail:  err.Error(),
+			}
+		}
+		issuesStr = string(issuesBytes)
+	}
+
+	// Generate QC record ID
+	compositeID := pkg.ID + sessionID
+	hash := sha256.Sum256([]byte(compositeID))
+	qcID := fmt.Sprintf("QC-%s", hex.EncodeToString(hash[:])[:16])
+
+	// Create QC record
+	qcRecord := models.QCRecord{
+		ID:          qcID,
+		PackageID:   pkg.ID,
+		SessionID:   sessionID,
+		Passed:      passed,
+		InspectorID: session.OperatorID,
+		Issues:      issuesStr,
+	}
+
+	// Save QC record
+	err = dbTx.Create(&qcRecord).Error
+	if err != nil {
+		dbTx.Rollback()
+		return nil, nil, &DBError{
+			Code:    "INSERT_FAILED",
+			Message: "Failed to create QC record",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Update package status based on QC result
+	if passed {
+		pkg.Status = "qc_passed"
+	} else {
+		pkg.Status = "qc_failed"
+	}
+
+	// Save updated package status
+	err = dbTx.Save(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		return nil, nil, &DBError{
+			Code:    "UPDATE_FAILED",
+			Message: "Failed to update package status",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Commit transaction
+	err = dbTx.Commit().Error
+	if err != nil {
+		return nil, nil, &DBError{
+			Code:    "COMMIT_FAILED",
+			Message: "Failed to commit transaction",
+			Detail:  err.Error(),
+		}
+	}
+
+	return &pkg, &qcRecord, nil
 }

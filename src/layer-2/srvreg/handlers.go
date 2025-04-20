@@ -75,7 +75,11 @@ func (sr *ServiceRegistry) ScanPackageHandler(req *Request) (*Response, error) {
 	err := json.Unmarshal([]byte(req.Body), &body)
 	if err != nil {
 		sr.logger.Info("Failed to parse body", "error", err.Error())
-		return nil, err
+		return &Response{
+			StatusCode: http.StatusUnprocessableEntity,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       fmt.Sprintf(`{"error":"Invalid body format: %s"}`, err.Error()),
+		}, fmt.Errorf("invalid body format")
 	}
 
 	pathParts := strings.Split(req.Path, "/")
@@ -166,7 +170,11 @@ func (sr *ServiceRegistry) ValidatePackageHandler(req *Request) (*Response, erro
 	err := json.Unmarshal([]byte(req.Body), &body)
 	if err != nil {
 		sr.logger.Info("Failed to parse body", "error", err.Error())
-		return nil, err
+		return &Response{
+			StatusCode: http.StatusUnprocessableEntity,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       fmt.Sprintf(`{"error":"Invalid body format: %s"}`, err.Error()),
+		}, fmt.Errorf("invalid body format")
 	}
 	if body.Signature == "" {
 		return &Response{
@@ -215,5 +223,69 @@ func (sr *ServiceRegistry) ValidatePackageHandler(req *Request) (*Response, erro
 		StatusCode: http.StatusAccepted,
 		Headers:    map[string]string{"Content-Type": "application/json"},
 		Body:       fmt.Sprintf(`{"message":"package validated successfully","package_id":"%s","supplier":"%s","session_id":"%s"}`, pkg.ID, pkg.Supplier.Name, sessionID),
+	}, nil
+}
+
+type QualityCheckHandler struct {
+	Passed bool     `json:"passed"`
+	Issues []string `json:"issues"`
+}
+
+func (sr *ServiceRegistry) QualityCheckHandler(req *Request) (*Response, error) {
+	pathParts := strings.Split(req.Path, "/")
+	if len(pathParts) != 4 {
+		return &Response{
+			StatusCode: http.StatusBadRequest,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       `{"error":"Invalid path format"}`,
+		}, fmt.Errorf("invalid path format")
+	}
+	sessionID := pathParts[2]
+
+	var body QualityCheckHandler
+	err := json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
+		sr.logger.Info("Failed to parse body", "error", err.Error())
+		return &Response{
+			StatusCode: http.StatusUnprocessableEntity,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       fmt.Sprintf(`{"error":"Invalid body format: %s"}`, err.Error()),
+		}, fmt.Errorf("invalid body format")
+	}
+
+	pkg, qcRecord, dbErr := sr.repository.QualityCheck(sessionID, body.Passed, body.Issues)
+	if dbErr != nil {
+		switch dbErr.Code {
+		case "ENTITY_NOT_FOUND":
+			return &Response{
+				StatusCode: http.StatusNotFound,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       fmt.Sprintf(`{"error":"%s"}`, dbErr.Message),
+			}, fmt.Errorf("entity not found: %s", dbErr.Message)
+		default:
+			return &Response{
+				StatusCode: http.StatusInternalServerError,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       `{"error":"Internal server error"}`,
+			}, nil
+		}
+	}
+	if qcRecord == nil {
+		return &Response{
+			StatusCode: http.StatusNotFound,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       `{"error":"qcRecord is nil"}`,
+		}, err
+	}
+
+	return &Response{
+		StatusCode: http.StatusAccepted,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body: fmt.Sprintf(`{
+		"message":"QC record created for package %s",
+		"package_id":"%s",
+		"qc_record_id":"%s",
+		"operator_id": "%s"
+		}`, pkg.ID, pkg.ID, qcRecord.ID, qcRecord.InspectorID),
 	}, nil
 }

@@ -12,9 +12,9 @@ type Session struct {
 	Operator    *Operator `gorm:"foreignKey:OperatorID"`
 	IsCommitted bool      `gorm:"column:is_committed;default:false"`
 	TxHash      *string   `gorm:"column:tx_hash;type:varchar(66)"` // Null if not committed
+	Package     *Package  `gorm:"foreignKey:SessionID"`
 
 	// Relationships
-	Packages    []Package    `gorm:"foreignKey:SessionID"`
 	QCRecords   []QCRecord   `gorm:"foreignKey:SessionID"`
 	Labels      []Label      `gorm:"foreignKey:SessionID"`
 	Transaction *Transaction `gorm:"foreignKey:SessionID"`
