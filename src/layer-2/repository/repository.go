@@ -179,5 +179,44 @@ func (r *Repository) Seed() {
 		}
 	}
 
+	// Create sample packages with items
+	packages := []models.Package{
+		{ID: "PKG-001", SupplierID: "SUP-001", DeliveryNoteID: "DN-001", Signature: "digital_sig_001", IsTrusted: true},
+		{ID: "PKG-002", SupplierID: "SUP-002", DeliveryNoteID: "DN-002", Signature: "digital_sig_002", IsTrusted: true},
+		{ID: "PKG-003", SupplierID: "SUP-003", DeliveryNoteID: "DN-003", Signature: "digital_sig_003", IsTrusted: false},
+		{ID: "PKG-004", SupplierID: "SUP-001", DeliveryNoteID: "DN-004", Signature: "digital_sig_004", IsTrusted: true},
+		{ID: "PKG-005", SupplierID: "SUP-004", DeliveryNoteID: "DN-005", Signature: "digital_sig_005", IsTrusted: true},
+	}
+
+	for _, pkg := range packages {
+		if err := r.DB.Create(&pkg).Error; err != nil {
+			log.Printf("Error creating package %s: %v", pkg.ID, err)
+		}
+	}
+
+	// Create items for each package
+	items := []models.Item{
+		{ID: "ITEM-001", PackageID: "PKG-001", Quantity: 5, Description: "Smartphones", CatalogID: ptrString("CAT-001")},
+		{ID: "ITEM-002", PackageID: "PKG-001", Quantity: 10, Description: "Earbuds", CatalogID: ptrString("CAT-002")},
+		{ID: "ITEM-003", PackageID: "PKG-002", Quantity: 3, Description: "Tablets", CatalogID: ptrString("CAT-003")},
+		{ID: "ITEM-004", PackageID: "PKG-002", Quantity: 8, Description: "Watches", CatalogID: ptrString("CAT-004")},
+		{ID: "ITEM-005", PackageID: "PKG-003", Quantity: 15, Description: "Speakers", CatalogID: ptrString("CAT-005")},
+		{ID: "ITEM-006", PackageID: "PKG-003", Quantity: 50, Description: "Cables", CatalogID: ptrString("CAT-006")},
+		{ID: "ITEM-007", PackageID: "PKG-004", Quantity: 20, Description: "Laptop Sleeves", CatalogID: ptrString("CAT-007")},
+		{ID: "ITEM-008", PackageID: "PKG-004", Quantity: 12, Description: "Power Banks", CatalogID: ptrString("CAT-008")},
+		{ID: "ITEM-009", PackageID: "PKG-005", Quantity: 4, Description: "Tablets", CatalogID: ptrString("CAT-003")},
+		{ID: "ITEM-010", PackageID: "PKG-005", Quantity: 25, Description: "Cables", CatalogID: ptrString("CAT-006")},
+	}
+
+	for _, item := range items {
+		if err := r.DB.Create(&item).Error; err != nil {
+			log.Printf("Error creating item %s: %v", item.ID, err)
+		}
+	}
+
 	log.Println("Database seeding completed successfully")
+}
+
+func ptrString(s string) *string {
+	return &s
 }

@@ -11,7 +11,7 @@ import (
 	"log"
 	"sync"
 
-	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/service-registry"
+	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/srvreg"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"github.com/dgraph-io/badger/v4"

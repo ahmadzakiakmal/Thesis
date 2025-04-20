@@ -1,4 +1,4 @@
-package service_registry
+package srvreg
 
 import (
 	"crypto/sha256"
@@ -288,10 +288,10 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 
 	// Endpoints
 
-	// Create Session Endpoint
 	type startSessionBody struct {
 		OperatorID string `json:"operator_id"`
 	}
+	// Create Session Endpoint
 	sr.RegisterHandler("POST", "/session/start", true, func(req *Request) (*Response, error) {
 		sessionID := fmt.Sprintf("SESSION-%s", req.RequestID)
 		// operatorID := "OPR-001" // TODO: get from request
@@ -372,6 +372,7 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 			Body:       fmt.Sprintf(`{"message":"Session generated","id":"%s"}`, sessionID),
 		}, nil
 	})
+
 }
 
 // GenerateResponse executes the request and generates a response

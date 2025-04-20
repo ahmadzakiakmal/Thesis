@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/app"
-	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/service-registry"
+	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/srvreg"
 
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	nm "github.com/cometbft/cometbft/node"

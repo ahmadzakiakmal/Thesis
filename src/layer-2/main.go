@@ -14,7 +14,7 @@ import (
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/app"
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository"
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/server"
-	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/service-registry"
+	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/srvreg"
 	cfg "github.com/cometbft/cometbft/config"
 	cmtflags "github.com/cometbft/cometbft/libs/cli/flags"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
