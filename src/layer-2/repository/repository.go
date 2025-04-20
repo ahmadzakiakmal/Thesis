@@ -276,8 +276,8 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 	return &session, nil
 }
 
-// ValidatePackage validates the package comes from the valid supplier and assigns the sessionID to it
-func (r *Repository) ValidatePackage(sessionID, packageID string) (*models.Package, *DBError) {
+// ScanPackage returns the expected item and signature of the package
+func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, *DBError) {
 	// Begin transaction
 	dbTx := r.DB.Begin()
 
@@ -300,9 +300,7 @@ func (r *Repository) ValidatePackage(sessionID, packageID string) (*models.Packa
 		}
 	}
 
-	// For POC, always accept the signature
-	pkg.IsTrusted = true
-	pkg.SessionID = &sessionID
+	pkg.Status = "pending_validation"
 
 	// Save changes
 	err = dbTx.Save(&pkg).Error
@@ -327,3 +325,5 @@ func (r *Repository) ValidatePackage(sessionID, packageID string) (*models.Packa
 
 	return &pkg, nil
 }
+
+func (r *Repository) ValidatePackage() {}

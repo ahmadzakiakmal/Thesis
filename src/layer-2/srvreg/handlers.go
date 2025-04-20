@@ -92,7 +92,7 @@ func (sr *ServiceRegistry) ScanHandler(req *Request) (*Response, error) {
 		return nil, fmt.Errorf("package_id is required")
 	}
 
-	pkg, dbErr := sr.repository.ValidatePackage(sessionID, body.PackageID)
+	pkg, dbErr := sr.repository.ScanPackage(sessionID, body.PackageID)
 	if dbErr != nil {
 		switch dbErr.Code {
 		case "ENTITY_NOT_FOUND":
@@ -142,8 +142,9 @@ func (sr *ServiceRegistry) ScanHandler(req *Request) (*Response, error) {
 			"source": "%s",
 			"package_id": "%s",
 			"expected_contents": %s,
+			"supplier_signature": "%s",
 			"next_step": "validate"
-	}`, supplierName, pkg.ID, string(contentsJSON))
+	}`, supplierName, pkg.ID, string(contentsJSON), pkg.Signature)
 
 	// Remove whitespace for valid JSON
 	response = strings.Replace(strings.Replace(strings.Replace(response, "\n", "", -1), "    ", "", -1), "\t", "", -1)

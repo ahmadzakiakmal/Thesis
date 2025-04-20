@@ -10,6 +10,7 @@ type Package struct {
 	DeliveryNoteID string    `gorm:"column:delivery_note_id;type:varchar(50)"`
 	Signature      string    `gorm:"column:signature;type:text"`
 	IsTrusted      bool      `gorm:"column:is_trusted;default:false"`
+	Status         string    `gorm:"column:status;type:varchar(20);default:'pending'"`
 
 	// Relationships
 	Items     []Item     `gorm:"foreignKey:PackageID"`
