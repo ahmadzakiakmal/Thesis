@@ -149,7 +149,7 @@ func (ws *WebServer) Shutdown(ctx context.Context) error {
 // handleRoot handles the root endpoint which shows node status
 func (ws *WebServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		JSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -165,7 +165,7 @@ func (ws *WebServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 // handleDebug provides debugging information
 func (ws *WebServer) handleDebug(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		JSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -220,7 +220,7 @@ func (ws *WebServer) handleDebug(w http.ResponseWriter, r *http.Request) {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(debugInfo); err != nil {
-		http.Error(w, "Error encoding response: "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Error encoding response: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
@@ -236,7 +236,7 @@ func (ws *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// Generate a unique request ID
 	requestID, err := generateRequestID()
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		JSONError(w, "Internal Server Error", http.StatusInternalServerError)
 		ws.logger.Error("Failed to generate request ID", "err", err)
 		return
 	}
@@ -244,7 +244,7 @@ func (ws *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// Convert HTTP request to Request
 	request, err := service_registry.ConvertHttpRequestToConsensusRequest(r, requestID)
 	if err != nil {
-		http.Error(w, "Failed to process request: "+err.Error(), http.StatusBadRequest)
+		JSONError(w, "Failed to process request: "+err.Error(), http.StatusBadRequest)
 		ws.logger.Error("Failed to convert HTTP request", "err", err)
 		return
 	}
@@ -253,7 +253,7 @@ func (ws *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// Generate response locally by processing the request
 	response, err := request.GenerateResponse(ws.serviceRegistry)
 	if err != nil {
-		http.Error(w, "Failed to process request: "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Failed to process request: "+err.Error(), http.StatusInternalServerError)
 		ws.logger.Error("Failed to generate response", "err", err)
 		return
 	}
@@ -285,7 +285,7 @@ func (ws *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// Serialize the transaction
 	txBytes, err := transaction.SerializeToBytes()
 	if err != nil {
-		http.Error(w, "Failed to serialize transaction: "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Failed to serialize transaction: "+err.Error(), http.StatusInternalServerError)
 		ws.logger.Error("Failed to serialize transaction", "err", err)
 		return
 	}
@@ -298,13 +298,13 @@ func (ws *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 
 	if consensusResponse.CheckTx.GetCode() != 0 {
 		code := strconv.Itoa(int(consensusResponse.CheckTx.Code))
-		http.Error(w, "Consensus error with code "+code+": "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Consensus error with code "+code+": "+err.Error(), http.StatusInternalServerError)
 		ws.logger.Error("Failed to broadcast transaction", "err", err)
 		return
 	}
 
 	if err != nil {
-		http.Error(w, "Consensus error: "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Consensus error: "+err.Error(), http.StatusInternalServerError)
 		ws.logger.Error("Failed to broadcast transaction", "err", err)
 		return
 	}
@@ -370,14 +370,14 @@ func (ws *WebServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 // handleTransactionStatus returns the status of a transaction
 func (ws *WebServer) handleTransactionStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		JSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	// Extract transaction ID from URL
 	pathParts := strings.Split(r.URL.Path, "/")
 	if len(pathParts) != 3 || pathParts[1] != "status" {
-		http.Error(w, "Invalid transaction ID", http.StatusBadRequest)
+		JSONError(w, "Invalid transaction ID", http.StatusBadRequest)
 		return
 	}
 
@@ -386,12 +386,12 @@ func (ws *WebServer) handleTransactionStatus(w http.ResponseWriter, r *http.Requ
 	// Check transaction status
 	status, err := ws.checkTransactionStatus(txID)
 	if err != nil {
-		http.Error(w, "Error checking transaction status: "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Error checking transaction status: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	if status == nil {
-		http.Error(w, "Transaction not found", http.StatusNotFound)
+		JSONError(w, "Transaction not found", http.StatusNotFound)
 		return
 	}
 
@@ -401,7 +401,7 @@ func (ws *WebServer) handleTransactionStatus(w http.ResponseWriter, r *http.Requ
 	encoder.SetIndent("", "  ")
 	err = encoder.Encode(status)
 	if err != nil {
-		http.Error(w, "Error encoding response: "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Error encoding response: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
@@ -410,21 +410,21 @@ func (ws *WebServer) handleTransactionStatus(w http.ResponseWriter, r *http.Requ
 func (ws *WebServer) handleSessionAPI(w http.ResponseWriter, r *http.Request) {
 	requestID, err := generateRequestID()
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		JSONError(w, "Internal Server Error", http.StatusInternalServerError)
 		ws.logger.Error("Failed to generate request ID", "err", err)
 		return
 	}
 
 	request, err := service_registry.ConvertHttpRequestToConsensusRequest(r, requestID)
 	if err != nil {
-		http.Error(w, "Failed to process request: "+err.Error(), http.StatusUnprocessableEntity)
+		JSONError(w, "Failed to convert request: "+err.Error(), http.StatusUnprocessableEntity)
 		ws.logger.Error("Failed to convert HTTP request", "err", err)
 		return
 	}
 
 	response, err := request.GenerateResponse(ws.serviceRegistry)
 	if err != nil {
-		http.Error(w, "Failed to process request: "+err.Error(), http.StatusUnprocessableEntity)
+		JSONError(w, "Failed to generate response: "+err.Error(), http.StatusUnprocessableEntity)
 		ws.logger.Error("Failed to generate response", "err", err)
 		return
 	}
@@ -437,7 +437,7 @@ func (ws *WebServer) handleSessionAPI(w http.ResponseWriter, r *http.Request) {
 
 	txBytes, err := transaction.SerializeToBytes()
 	if err != nil {
-		http.Error(w, "Failed to serialize transaction: "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Failed to serialize transaction: "+err.Error(), http.StatusInternalServerError)
 		ws.logger.Error("Failed to serialize transaction", "err", err)
 		return
 	}
@@ -446,12 +446,12 @@ func (ws *WebServer) handleSessionAPI(w http.ResponseWriter, r *http.Request) {
 	consensusResponse, err := ws.cometBftRpcClient.BroadcastTxCommit(context.Background(), txBytes)
 	if consensusResponse.CheckTx.GetCode() != 0 {
 		code := strconv.Itoa(int(consensusResponse.CheckTx.Code))
-		http.Error(w, "Consensus error with code "+code+": "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Consensus error with code "+code+": "+err.Error(), http.StatusInternalServerError)
 		ws.logger.Error("Failed to broadcast transaction", "err", err)
 		return
 	}
 	if err != nil {
-		http.Error(w, "Consensus error: "+err.Error(), http.StatusInternalServerError)
+		JSONError(w, "Consensus error: "+err.Error(), http.StatusInternalServerError)
 		ws.logger.Error("Failed to broadcast transaction", "err", err)
 		return
 	}
@@ -614,4 +614,29 @@ func extractPortFromAddress(address string) string {
 		}
 	}
 	return ""
+}
+
+// JSONError sends a JSON formatted error response with the given status code and message
+func JSONError(w http.ResponseWriter, message string, statusCode int) {
+	// Create error response struct
+	errorResponse := struct {
+		Error string `json:"error"`
+	}{
+		Error: message,
+	}
+
+	// Convert to JSON
+	jsonBytes, err := json.Marshal(errorResponse)
+	if err != nil {
+		// If JSON marshaling fails, fall back to plain text
+		JSONError(w, "Internal server error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Set content type and status code
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	// Write JSON response
+	w.Write(jsonBytes)
 }

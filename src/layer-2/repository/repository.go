@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository/models"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -53,6 +55,12 @@ const (
 	// Class XX — Internal Error
 	PgErrInternalError = "XX000" // internal_error
 )
+
+type DBError struct {
+	Code    string
+	Message string
+	Detail  string
+}
 
 type Repository struct {
 	DB  *gorm.DB
@@ -219,4 +227,50 @@ func (r *Repository) Seed() {
 
 func ptrString(s string) *string {
 	return &s
+}
+
+// DB Operations
+
+// CreateSession creates a new session in the Database
+func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Session, *DBError) {
+	session := models.Session{
+		ID:          sessionID,
+		Status:      "active",
+		IsCommitted: false,
+		OperatorID:  operatorID,
+	}
+
+	dbTx := r.DB.Begin()
+	err := dbTx.Create(&session).Error
+	if err != nil {
+		fmt.Println("REPO DB ERROR")
+		fmt.Printf("Error type: %T\n", err)
+		fmt.Printf("Error value: %v\n", err)
+		dbTx.Rollback()
+		pgErr, isPgError := err.(*pgconn.PgError)
+		if isPgError {
+			fmt.Println(pgErr.Code)
+			return nil, &DBError{
+				Code:    string(pgErr.Code),
+				Message: pgErr.Message,
+				Detail:  pgErr.Detail,
+			}
+		}
+		return nil, &DBError{
+			Code:    "UNKNOWN_ERROR",
+			Message: "Unknown error occured",
+			Detail:  err.Error(),
+		}
+	}
+
+	err = dbTx.Commit().Error
+	if err != nil {
+		return nil, &DBError{
+			Code:    "UNKNOWN_ERROR",
+			Message: "Unknown error occured",
+			Detail:  err.Error(),
+		}
+	}
+
+	return &session, nil
 }

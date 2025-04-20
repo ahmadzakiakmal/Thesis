@@ -13,9 +13,7 @@ import (
 	"time"
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository"
-	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository/models"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
-	"github.com/lib/pq"
 	"gorm.io/gorm"
 )
 
@@ -94,7 +92,7 @@ type ServiceRegistry struct {
 	handlers    map[RouteKey]ServiceHandler
 	exactRoutes map[RouteKey]bool // Whether a route is exact or pattern-based
 	mu          sync.RWMutex
-	database    *gorm.DB
+	repository  *repository.Repository
 	logger      cmtlog.Logger
 	isByzantine bool
 }
@@ -137,11 +135,11 @@ func ConvertHttpRequestToConsensusRequest(r *http.Request, requestID string) (*R
 }
 
 // NewServiceRegistry creates a new service registry
-func NewServiceRegistry(db *gorm.DB, logger cmtlog.Logger, isByzantine bool) *ServiceRegistry {
+func NewServiceRegistry(db *gorm.DB, repository *repository.Repository, logger cmtlog.Logger, isByzantine bool) *ServiceRegistry {
 	return &ServiceRegistry{
 		handlers:    make(map[RouteKey]ServiceHandler),
 		exactRoutes: make(map[RouteKey]bool),
-		database:    db,
+		repository:  repository,
 		logger:      logger,
 		isByzantine: isByzantine,
 	}
@@ -216,76 +214,6 @@ func matchPath(pattern, path string) bool {
 
 // RegisterDefaultServices sets up the default services for the BFT system
 func (sr *ServiceRegistry) RegisterDefaultServices() {
-	// The original DeWS endpoints, for baseline testing only
-	sr.RegisterHandler("POST", "/api/customers", true, func(req *Request) (*Response, error) {
-		var newUser models.User
-		err := json.Unmarshal([]byte(req.Body), &newUser)
-		if err != nil {
-			return &Response{
-				StatusCode: http.StatusInternalServerError,
-				Headers:    map[string]string{"Content-Type": "application/json"},
-				Body:       "failed to parse body",
-			}, fmt.Errorf("failed to parse body")
-		}
-		dbTx := sr.database.Begin()
-		err = dbTx.Create(&models.User{
-			Name:  newUser.Name,
-			Email: newUser.Email,
-		}).Error
-		log.Println("=========")
-		log.Printf("Registering User with email :%s\n", newUser.Email)
-		log.Println("=========")
-		if err != nil {
-			dbTx.Rollback()
-			log.Printf("Error on DB transaction: %s\n", err.Error())
-			responseBody := fmt.Sprintf("error on database transaction: %s", err.Error())
-			return &Response{
-				StatusCode: http.StatusInternalServerError,
-				Headers:    map[string]string{"Content-Type": "application/json"},
-				Body:       responseBody,
-			}, fmt.Errorf("error on database transaction: %s", err.Error())
-		}
-
-		log.Println("Success")
-		dbTx.Commit()
-		return &Response{
-			StatusCode: http.StatusCreated,
-			Headers:    map[string]string{"Content-Type": "application/json"},
-			Body:       fmt.Sprintf(`{"message":"Customer created successfully","email":"%s","requestId":"%s"}`, newUser.Email, req.RequestID),
-		}, nil
-	})
-
-	sr.RegisterHandler("GET", "/api/customers", true, func(req *Request) (*Response, error) {
-		var customers []models.User
-		err := sr.database.Find(&customers).Error
-		if err != nil {
-			responseBody := fmt.Sprintf("error on database transaction: %s", err.Error())
-			return &Response{
-				StatusCode: http.StatusUnprocessableEntity,
-				Headers:    map[string]string{"Content-Type": "application/json"},
-				Body:       responseBody,
-			}, fmt.Errorf("error on database transaction: %s", err.Error())
-		}
-
-		responseBody := map[string]interface{}{
-			"customers": customers,
-		}
-		jsonBytes, err := json.Marshal(responseBody)
-		if err != nil {
-			return &Response{
-				StatusCode: http.StatusInternalServerError,
-				Headers:    map[string]string{"Content-Type": "application/json"},
-				Body:       `{"error":"failed to marshal response"}`,
-			}, err
-		}
-		return &Response{
-			StatusCode:    http.StatusOK,
-			Headers:       map[string]string{"Content-Type": "application/json"},
-			Body:          string(jsonBytes),
-			BodyInterface: customers,
-		}, nil
-	})
-
 	// Endpoints
 
 	type startSessionBody struct {
@@ -314,65 +242,39 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 				Body:       `{"error":"operator ID is required"}`,
 			}, err
 		}
-		session := models.Session{
-			ID:          sessionID,
-			Status:      "active",
-			IsCommitted: false,
-			OperatorID:  operatorID,
-		}
 
-		dbTx := sr.database.Begin()
-		err = dbTx.Create(&session).Error
-		if err != nil {
-			dbTx.Rollback()
-			if pqErr, ok := err.(*pq.Error); ok {
-				switch pqErr.Code {
-				case repository.PgErrForeignKeyViolation: // foreign_key_violation
-					return &Response{
-						StatusCode: http.StatusBadRequest,
-						Headers:    map[string]string{"Content-Type": "application/json"},
-						Body:       fmt.Sprintf(`{"error":"Invalid reference: %s"}`, pqErr.Detail),
-					}, fmt.Errorf("foreign key violation: %v", pqErr.Detail)
-
-				case repository.PgErrUniqueViolation: // unique_violation
-					return &Response{
-						StatusCode: http.StatusConflict,
-						Headers:    map[string]string{"Content-Type": "application/json"},
-						Body:       fmt.Sprintf(`{"error":"Record already exists: %s"}`, pqErr.Detail),
-					}, fmt.Errorf("unique violation: %v", pqErr.Detail)
-
-				default:
-					return &Response{
-						StatusCode: http.StatusInternalServerError,
-						Headers:    map[string]string{"Content-Type": "application/json"},
-						Body:       fmt.Sprintf(`{"error":"Database error: %s (Code: %s)"}`, pqErr.Message, pqErr.Code),
-					}, fmt.Errorf("database error: %v", err)
-				}
+		session, dbErr := sr.repository.CreateSession(sessionID, operatorID)
+		if dbErr != nil {
+			fmt.Println("PG ERROR CODE")
+			fmt.Println(dbErr.Code)
+			switch dbErr.Code {
+			case repository.PgErrForeignKeyViolation: // PostgreSQL foreign key violation
+				return &Response{
+					StatusCode: http.StatusBadRequest,
+					Headers:    map[string]string{"Content-Type": "application/json"},
+					Body:       fmt.Sprintf(`{"error":"%s"}`, dbErr.Detail),
+				}, fmt.Errorf("foreign key violation: %s", dbErr.Message)
+			case repository.PgErrUniqueViolation: // PostgreSQL unique violation
+				return &Response{
+					StatusCode: http.StatusConflict,
+					Headers:    map[string]string{"Content-Type": "application/json"},
+					Body:       fmt.Sprintf(`{"error":"%s"}`, dbErr.Detail),
+				}, fmt.Errorf("unique violation: %s", dbErr.Message)
+			default:
+				return &Response{
+					StatusCode: http.StatusInternalServerError,
+					Headers:    map[string]string{"Content-Type": "application/json"},
+					Body:       `{"error":"Internal server error"}`,
+				}, nil
 			}
-			return &Response{
-				StatusCode: http.StatusInternalServerError,
-				Headers:    map[string]string{"Content-Type": "application/json"},
-				Body:       fmt.Sprintf(`{"error":"Failed to create session: %s"}`, err.Error()),
-			}, err
-		}
-
-		err = dbTx.Commit().Error
-		if err != nil {
-			sr.logger.Info("Failed to commit session transaction", "error", err.Error())
-			return &Response{
-				StatusCode: http.StatusInternalServerError,
-				Headers:    map[string]string{"Content-Type": "application/json"},
-				Body:       fmt.Sprintf(`{"error":"Failed to create session: %s"}`, err.Error()),
-			}, err
 		}
 
 		return &Response{
 			StatusCode: http.StatusCreated, // or http.StatusOK
 			Headers:    map[string]string{"Content-Type": "application/json"},
-			Body:       fmt.Sprintf(`{"message":"Session generated","id":"%s"}`, sessionID),
+			Body:       fmt.Sprintf(`{"message":"Session generated","id":"%s"}`, session.ID),
 		}, nil
 	})
-
 }
 
 // GenerateResponse executes the request and generates a response

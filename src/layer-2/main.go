@@ -62,11 +62,11 @@ func main() {
 
 	// Connect Postgresql DB
 	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/postgres", postgresHost)
-	database := repository.NewDatabaseService(dsn)
-	database.Connect()
-	database.Migrate()
-	database.Seed()
-	postgresDB := database.DB
+	repository := repository.NewDatabaseService(dsn)
+	repository.Connect()
+	repository.Migrate()
+	repository.Seed()
+	postgresDB := repository.DB
 	log.Printf("Connecting to: %s\n", dsn)
 
 	// Initialize Badger DB
@@ -90,7 +90,7 @@ func main() {
 	logger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
 
 	// Initialize Service Registry
-	serviceRegistry := service_registry.NewServiceRegistry(postgresDB, logger, false)
+	serviceRegistry := service_registry.NewServiceRegistry(postgresDB, repository, logger, false)
 	serviceRegistry.RegisterDefaultServices()
 
 	app := app.NewABCIApplication(db, serviceRegistry, appConfig, logger, postgresDB)
