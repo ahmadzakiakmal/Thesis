@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -189,11 +190,11 @@ func (r *Repository) Seed() {
 
 	// Create sample packages with items
 	packages := []models.Package{
-		{ID: "PKG-001", SupplierID: "SUP-001", DeliveryNoteID: "DN-001", Signature: "digital_sig_001", IsTrusted: true},
-		{ID: "PKG-002", SupplierID: "SUP-002", DeliveryNoteID: "DN-002", Signature: "digital_sig_002", IsTrusted: true},
+		{ID: "PKG-001", SupplierID: "SUP-001", DeliveryNoteID: "DN-001", Signature: "digital_sig_001", IsTrusted: false},
+		{ID: "PKG-002", SupplierID: "SUP-002", DeliveryNoteID: "DN-002", Signature: "digital_sig_002", IsTrusted: false},
 		{ID: "PKG-003", SupplierID: "SUP-003", DeliveryNoteID: "DN-003", Signature: "digital_sig_003", IsTrusted: false},
-		{ID: "PKG-004", SupplierID: "SUP-001", DeliveryNoteID: "DN-004", Signature: "digital_sig_004", IsTrusted: true},
-		{ID: "PKG-005", SupplierID: "SUP-004", DeliveryNoteID: "DN-005", Signature: "digital_sig_005", IsTrusted: true},
+		{ID: "PKG-004", SupplierID: "SUP-001", DeliveryNoteID: "DN-004", Signature: "digital_sig_004", IsTrusted: false},
+		{ID: "PKG-005", SupplierID: "SUP-004", DeliveryNoteID: "DN-005", Signature: "digital_sig_005", IsTrusted: false},
 	}
 
 	for _, pkg := range packages {
@@ -273,4 +274,56 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 	}
 
 	return &session, nil
+}
+
+// ValidatePackage validates the package comes from the valid supplier and assigns the sessionID to it
+func (r *Repository) ValidatePackage(sessionID, packageID string) (*models.Package, *DBError) {
+	// Begin transaction
+	dbTx := r.DB.Begin()
+
+	// Find the package by ID
+	var pkg models.Package
+	err := dbTx.Where("package_id = ?", packageID).First(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, &DBError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "Package does not exist",
+				Detail:  fmt.Sprintf("Package with id %s does not exist", packageID),
+			}
+		}
+		return nil, &DBError{
+			Code:    "DATABASE_ERROR",
+			Message: "Database error",
+			Detail:  err.Error(),
+		}
+	}
+
+	// For POC, always accept the signature
+	pkg.IsTrusted = true
+	pkg.SessionID = &sessionID
+
+	// Save changes
+	err = dbTx.Save(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		return nil, &DBError{
+			Code:    "UPDATE_FAILED",
+			Message: "Failed to update package",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Commit transaction
+	err = dbTx.Commit().Error
+	if err != nil {
+		return nil, &DBError{
+			Code:    "COMMIT_FAILED",
+			Message: "Failed to commit transaction",
+			Detail:  err.Error(),
+		}
+	}
+
+	return &pkg, nil
 }
