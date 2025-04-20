@@ -66,12 +66,12 @@ func (sr *ServiceRegistry) CreateSessionHandler(req *Request) (*Response, error)
 	}, nil
 }
 
-type scanHandlerBody struct {
+type scanPackageHandlerBody struct {
 	PackageID string `json:"package_id"`
 }
 
-func (sr *ServiceRegistry) ScanHandler(req *Request) (*Response, error) {
-	var body scanHandlerBody
+func (sr *ServiceRegistry) ScanPackageHandler(req *Request) (*Response, error) {
+	var body scanPackageHandlerBody
 	err := json.Unmarshal([]byte(req.Body), &body)
 	if err != nil {
 		sr.logger.Info("Failed to parse body", "error", err.Error())
@@ -153,5 +153,67 @@ func (sr *ServiceRegistry) ScanHandler(req *Request) (*Response, error) {
 		StatusCode: http.StatusOK,
 		Headers:    map[string]string{"Content-Type": "application/json"},
 		Body:       response,
+	}, nil
+}
+
+type validatePackageHandlerBody struct {
+	Signature string `json:"signature"`
+	PackageID string `json:"package_id"`
+}
+
+func (sr *ServiceRegistry) ValidatePackageHandler(req *Request) (*Response, error) {
+	var body validatePackageHandlerBody
+	err := json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
+		sr.logger.Info("Failed to parse body", "error", err.Error())
+		return nil, err
+	}
+	if body.Signature == "" {
+		return &Response{
+			StatusCode: http.StatusBadRequest,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       `{"error":"signature is required"}`,
+		}, err
+	}
+	if body.PackageID == "" {
+		return &Response{
+			StatusCode: http.StatusBadRequest,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       `{"error":"package_id is required"}`,
+		}, err
+	}
+
+	pathParts := strings.Split(req.Path, "/")
+	if len(pathParts) != 4 {
+		return &Response{
+			StatusCode: http.StatusBadRequest,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       `{"error":"Invalid path format"}`,
+		}, fmt.Errorf("invalid path format")
+	}
+	sessionID := pathParts[2]
+
+	pkg, dbErr := sr.repository.ValidatePackage(body.Signature, body.PackageID, sessionID)
+	if dbErr != nil {
+		switch dbErr.Code {
+		case "ENTITY_NOT_FOUND":
+			return &Response{
+				StatusCode: http.StatusNotFound,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       fmt.Sprintf(`{"error":"%s"}`, dbErr.Message),
+			}, fmt.Errorf("entity not found: %s", dbErr.Message)
+		default:
+			return &Response{
+				StatusCode: http.StatusInternalServerError,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       `{"error":"Internal server error"}`,
+			}, nil
+		}
+	}
+
+	return &Response{
+		StatusCode: http.StatusAccepted,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       fmt.Sprintf(`{"message":"package validated successfully","package_id":"%s","supplier":"%s","session_id":"%s"}`, pkg.ID, pkg.Supplier.Name, sessionID),
 	}, nil
 }

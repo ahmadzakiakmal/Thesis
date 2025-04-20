@@ -244,9 +244,6 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 	dbTx := r.DB.Begin()
 	err := dbTx.Create(&session).Error
 	if err != nil {
-		fmt.Println("REPO DB ERROR")
-		fmt.Printf("Error type: %T\n", err)
-		fmt.Printf("Error value: %v\n", err)
 		dbTx.Rollback()
 		pgErr, isPgError := err.(*pgconn.PgError)
 		if isPgError {
@@ -326,4 +323,50 @@ func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, 
 	return &pkg, nil
 }
 
-func (r *Repository) ValidatePackage() {}
+func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID string) (*models.Package, *DBError) {
+	dbTx := r.DB.Begin()
+
+	var pkg models.Package
+	err := dbTx.Preload("Items").Preload("Supplier").Where("package_id = ?", packageID).First(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, &DBError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "Package does not exist",
+				Detail:  fmt.Sprintf("Package with id %s does not exist", packageID),
+			}
+		}
+		return nil, &DBError{
+			Code:    "DATABASE_ERROR",
+			Message: "Database error",
+			Detail:  err.Error(),
+		}
+	}
+
+	// * For this PoC, assume all signature is valid
+	pkg.IsTrusted = true
+	pkg.SessionID = &SessionID
+	pkg.Status = "validated"
+
+	err = dbTx.Save(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		return nil, &DBError{
+			Code:    "UPDATE_FAILED",
+			Message: "Failed to update package",
+			Detail:  err.Error(),
+		}
+	}
+
+	err = dbTx.Commit().Error
+	if err != nil {
+		return nil, &DBError{
+			Code:    "COMMIT_FAILED",
+			Message: "Failed to commit transaction",
+			Detail:  err.Error(),
+		}
+	}
+
+	return &pkg, nil
+}
