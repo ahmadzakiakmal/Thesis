@@ -115,6 +115,7 @@ func (sr *ServiceRegistry) ScanHandler(req *Request) (*Response, error) {
 	for _, item := range pkg.Items {
 		expectedContents = append(expectedContents, map[string]interface{}{
 			"item_id": item.ID,
+			"item":    item.Description,
 			"qty":     item.Quantity,
 		})
 	}
