@@ -110,8 +110,46 @@ func (sr *ServiceRegistry) ScanHandler(req *Request) (*Response, error) {
 		}
 	}
 
+	// Format the items for the response
+	var expectedContents []map[string]interface{}
+	for _, item := range pkg.Items {
+		expectedContents = append(expectedContents, map[string]interface{}{
+			"item_id": item.ID,
+			"qty":     item.Quantity,
+		})
+	}
+
+	// Convert to JSON
+	contentsJSON, err := json.Marshal(expectedContents)
+	if err != nil {
+		return &Response{
+			StatusCode: http.StatusInternalServerError,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       `{"error":"Failed to process item data"}`,
+		}, nil
+	}
+
+	// Get supplier name
+	supplierName := "Unknown Supplier"
+	if pkg.Supplier != nil {
+		supplierName = pkg.Supplier.Name
+	}
+
+	// Build the response
+	response := fmt.Sprintf(`{
+			"status": 200,
+			"source": "%s",
+			"package_id": "%s",
+			"expected_contents": %s,
+			"next_step": "validate"
+	}`, supplierName, pkg.ID, string(contentsJSON))
+
+	// Remove whitespace for valid JSON
+	response = strings.Replace(strings.Replace(strings.Replace(response, "\n", "", -1), "    ", "", -1), "\t", "", -1)
+
 	return &Response{
 		StatusCode: http.StatusOK,
-		Body:       fmt.Sprintf(`{"message":"Package validated","package_id":"%s",session_id:"%s"}`, pkg.ID, sessionID),
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       response,
 	}, nil
 }

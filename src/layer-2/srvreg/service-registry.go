@@ -63,10 +63,13 @@ func (r *Response) ParseBody() interface{} {
 	var bodyArray []interface{}
 	err = json.Unmarshal([]byte(r.Body), &bodyArray)
 	if err == nil {
+		log.Printf("Successful body parse")
 		return bodyArray
 	}
 
 	// If not valid JSON, return nil
+	log.Println("Invalid JSON")
+	log.Println(err)
 	return nil
 }
 

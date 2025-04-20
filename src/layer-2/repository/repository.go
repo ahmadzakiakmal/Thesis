@@ -281,9 +281,9 @@ func (r *Repository) ValidatePackage(sessionID, packageID string) (*models.Packa
 	// Begin transaction
 	dbTx := r.DB.Begin()
 
-	// Find the package by ID
+	// Find the package by ID with preloaded items and supplier
 	var pkg models.Package
-	err := dbTx.Where("package_id = ?", packageID).First(&pkg).Error
+	err := dbTx.Preload("Items").Preload("Supplier").Where("package_id = ?", packageID).First(&pkg).Error
 	if err != nil {
 		dbTx.Rollback()
 		if errors.Is(err, gorm.ErrRecordNotFound) {

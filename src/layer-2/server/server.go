@@ -618,14 +618,11 @@ func extractPortFromAddress(address string) string {
 
 // JSONError sends a JSON formatted error response with the given status code and message
 func JSONError(w http.ResponseWriter, message string, statusCode int) {
-	// Create error response struct
 	errorResponse := struct {
 		Error string `json:"error"`
 	}{
 		Error: message,
 	}
-
-	// Convert to JSON
 	jsonBytes, err := json.Marshal(errorResponse)
 	if err != nil {
 		// If JSON marshaling fails, fall back to plain text
