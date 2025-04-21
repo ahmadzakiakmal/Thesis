@@ -258,8 +258,8 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 			}
 		}
 		return nil, &DBError{
-			Code:    "UNKNOWN_ERROR",
-			Message: "Unknown error occured",
+			Code:    "DATABASE_ERROR",
+			Message: "Database error occured",
 			Detail:  err.Error(),
 		}
 	}
@@ -267,8 +267,8 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 	err = dbTx.Commit().Error
 	if err != nil {
 		return nil, &DBError{
-			Code:    "UNKNOWN_ERROR",
-			Message: "Unknown error occured",
+			Code:    "DATABASE_ERROR",
+			Message: "Database error occured",
 			Detail:  err.Error(),
 		}
 	}
@@ -326,7 +326,7 @@ func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, 
 	return &pkg, nil
 }
 
-// ValidatePackage validates the supplier's signature
+// ValidatePackage validates the supplier's signature, links package to the session
 func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID string) (*models.Package, *DBError) {
 	dbTx := r.DB.Begin()
 
@@ -496,4 +496,134 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 	}
 
 	return &pkg, &qcRecord, nil
+}
+
+// LabelPackage adds a label to the package
+func (r *Repository) LabelPackage(sessionID, label, destination, priority, courierID string) (*models.Label, *DBError) {
+	dbTx := r.DB.Begin()
+
+	log.Printf("Creating label for session: %s, destination: %s, priority: %s, courierID: %s",
+		sessionID, destination, priority, courierID)
+
+	var session models.Session
+	err := dbTx.Where("session_id = ?", sessionID).First(&session).Error
+	if err != nil {
+		dbTx.Rollback()
+		log.Printf("Session lookup error: %v", err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, &DBError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "Session does not exist",
+				Detail:  fmt.Sprintf("Session with id %s does not exist", sessionID),
+			}
+		}
+		return nil, &DBError{
+			Code:    "DATABASE_ERROR",
+			Message: "A database error occurred",
+			Detail:  err.Error(),
+		}
+	}
+	log.Printf("Found session: %s", session.ID)
+
+	var pkg models.Package
+	err = dbTx.Where("session_id = ?", sessionID).First(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		log.Printf("Package lookup error: %v", err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, &DBError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "No package found for this session",
+				Detail:  fmt.Sprintf("No package found for session %s", sessionID),
+			}
+		}
+		return nil, &DBError{
+			Code:    "DATABASE_ERROR",
+			Message: "A database error occurred",
+			Detail:  err.Error(),
+		}
+	}
+	log.Printf("Found package: %s for session: %s", pkg.ID, sessionID)
+
+	var courier models.Courier
+	err = dbTx.Where("courier_id = ?", courierID).First(&courier).Error
+	if err != nil {
+		dbTx.Rollback()
+		log.Printf("Courier lookup error: %v", err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, &DBError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "Courier does not exist",
+				Detail:  fmt.Sprintf("Courier with id %s does not exist", courierID),
+			}
+		}
+		return nil, &DBError{
+			Code:    "DATABASE_ERROR",
+			Message: "A database error occurred",
+			Detail:  err.Error(),
+		}
+	}
+	log.Printf("Found courier: %s", courier.ID)
+
+	hash := sha256.Sum256([]byte(label + pkg.ID))
+	labelID := fmt.Sprintf("LBL-%s", hex.EncodeToString(hash[:])[:16])
+	log.Printf("Generated label ID: %s", labelID)
+
+	newLabel := models.Label{
+		ID:          labelID,
+		PackageID:   pkg.ID,
+		SessionID:   session.ID,
+		Destination: destination,
+		CourierID:   courier.ID,
+		Courier:     courier.Name,
+		Priority:    priority,
+	}
+
+	dbTx = dbTx.Debug()
+
+	err = dbTx.Create(&newLabel).Error
+	if err != nil {
+		dbTx.Rollback()
+		log.Printf("Failed to create label: %v", err)
+		return nil, &DBError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to create label",
+			Detail:  err.Error(),
+		}
+	}
+
+	var checkLabel models.Label
+	err = dbTx.Where("label_id = ?", labelID).First(&checkLabel).Error
+	if err != nil {
+		dbTx.Rollback()
+		log.Printf("Failed to verify label creation: %v", err)
+		return nil, &DBError{
+			Code:    "DATABASE_ERROR",
+			Message: "Label created but couldn't be verified",
+			Detail:  err.Error(),
+		}
+	}
+	log.Printf("Label verified in transaction: %s", checkLabel.ID)
+
+	err = dbTx.Commit().Error
+	if err != nil {
+		log.Printf("Failed to commit transaction: %v", err)
+		return nil, &DBError{
+			Code:    "COMMIT_FAILED",
+			Message: "Failed to commit transaction",
+			Detail:  err.Error(),
+		}
+	}
+
+	log.Printf("Transaction committed successfully, label created: %s", labelID)
+
+	var finalCheck models.Label
+	err = r.DB.Where("label_id = ?", labelID).First(&finalCheck).Error
+	if err != nil {
+		log.Printf("WARNING: Label not found after commit: %v", err)
+	} else {
+		log.Printf("CONFIRMED: Label %s exists in database", finalCheck.ID)
+	}
+
+	return &newLabel, nil
 }

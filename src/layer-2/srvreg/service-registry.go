@@ -227,6 +227,8 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 	sr.RegisterHandler("POST", "/session/:id/validate", false, sr.ValidatePackageHandler)
 	// Quality Check Endpoint
 	sr.RegisterHandler("POST", "/session/:id/qc", false, sr.QualityCheckHandler)
+	// Label Package Endpoint
+	sr.RegisterHandler("POST", "/session/:id/label", false, sr.LabelPackageHandler)
 }
 
 // GenerateResponse executes the request and generates a response

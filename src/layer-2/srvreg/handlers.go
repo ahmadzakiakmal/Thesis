@@ -289,3 +289,63 @@ func (sr *ServiceRegistry) QualityCheckHandler(req *Request) (*Response, error) 
 		}`, pkg.ID, pkg.ID, qcRecord.ID, qcRecord.InspectorID),
 	}, nil
 }
+
+type labelPackageHandlerBody struct {
+	Label       string `json:"label"`
+	Destination string `json:"destination"`
+	Priority    string `json:"priority"`
+	CourierID   string `json:"courier_id"`
+}
+
+// LabelPackageHandler assigns a label, courier, and destination
+func (sr *ServiceRegistry) LabelPackageHandler(req *Request) (*Response, error) {
+	pathParts := strings.Split(req.Path, "/")
+	if len(pathParts) != 4 {
+		return &Response{
+			StatusCode: http.StatusBadRequest,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       `{"error":"Invalid path format"}`,
+		}, fmt.Errorf("invalid path format")
+	}
+	sessionID := pathParts[2]
+
+	var body labelPackageHandlerBody
+	err := json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
+		return &Response{
+			StatusCode: http.StatusUnprocessableEntity,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       fmt.Sprintf(`{"error":"%s"}`, err.Error()),
+		}, err
+	}
+
+	newLabel, dbErr := sr.repository.LabelPackage(sessionID, body.Label, body.Destination, body.Priority, body.CourierID)
+	if dbErr != nil {
+		if dbErr.Code == "ENTITY_NOT_FOUND" {
+			return &Response{
+				StatusCode: http.StatusNotFound,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       fmt.Sprintf(`{"error":"%s"}`, dbErr.Detail),
+			}, fmt.Errorf("database error: %v", dbErr)
+		}
+		if dbErr.Code == repository.PgErrForeignKeyViolation {
+			return &Response{
+				StatusCode: http.StatusBadRequest,
+				Headers:    map[string]string{"Content-Type": "application/json"},
+				Body:       fmt.Sprintf(`{"error":"%s"}`, dbErr.Detail),
+			}, fmt.Errorf("database error: %v", dbErr)
+		}
+		return &Response{
+			StatusCode: http.StatusInternalServerError,
+			Headers:    map[string]string{"Content-Type": "application/json"},
+			Body:       fmt.Sprintf(`{"error":"%s"}`, dbErr.Detail),
+		}, fmt.Errorf("database error: %v", dbErr)
+	}
+
+	responseBody := fmt.Sprintf(`{"label_id":"%s"}`, newLabel.ID)
+	return &Response{
+		StatusCode: http.StatusAccepted,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       responseBody,
+	}, nil
+}
