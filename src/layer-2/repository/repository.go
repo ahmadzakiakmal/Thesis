@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository/models"
 	cmtrpc "github.com/cometbft/cometbft/rpc/client/local"
+	cmttypes "github.com/cometbft/cometbft/types"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -61,7 +63,18 @@ const (
 	PgErrInternalError = "XX000" // internal_error
 )
 
-type DBError struct {
+// ConsensusPayload represents data that will be sent to consensus
+type ConsensusPayload interface{}
+
+// ConsensusResult contains the result of a consensus operation
+type ConsensusResult struct {
+	TxHash      string
+	BlockHeight int64
+	Code        uint32
+	Error       error
+}
+
+type RepositoryError struct {
 	Code    string
 	Message string
 	Detail  string
@@ -240,7 +253,7 @@ func ptrString(s string) *string {
 // DB Operations
 
 // CreateSession creates a new session in the Database
-func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Session, *DBError) {
+func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Session, *RepositoryError) {
 	session := models.Session{
 		ID:          sessionID,
 		Status:      "active",
@@ -255,13 +268,13 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 		pgErr, isPgError := err.(*pgconn.PgError)
 		if isPgError {
 			fmt.Println(pgErr.Code)
-			return nil, &DBError{
+			return nil, &RepositoryError{
 				Code:    string(pgErr.Code),
 				Message: pgErr.Message,
 				Detail:  pgErr.Detail,
 			}
 		}
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "Database error occured",
 			Detail:  err.Error(),
@@ -270,7 +283,7 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 
 	err = dbTx.Commit().Error
 	if err != nil {
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "Database error occured",
 			Detail:  err.Error(),
@@ -281,7 +294,7 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 }
 
 // ScanPackage returns the expected item and signature of the package
-func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, *DBError) {
+func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, *RepositoryError) {
 	// Begin transaction
 	dbTx := r.db.Begin()
 
@@ -291,13 +304,13 @@ func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, 
 	if err != nil {
 		dbTx.Rollback()
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, &DBError{
+			return nil, &RepositoryError{
 				Code:    "ENTITY_NOT_FOUND",
 				Message: "Package does not exist",
 				Detail:  fmt.Sprintf("Package with id %s does not exist", packageID),
 			}
 		}
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "Database error",
 			Detail:  err.Error(),
@@ -310,7 +323,7 @@ func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, 
 	err = dbTx.Save(&pkg).Error
 	if err != nil {
 		dbTx.Rollback()
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "UPDATE_FAILED",
 			Message: "Failed to update package",
 			Detail:  err.Error(),
@@ -320,7 +333,7 @@ func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, 
 	// Commit transaction
 	err = dbTx.Commit().Error
 	if err != nil {
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "COMMIT_FAILED",
 			Message: "Failed to commit transaction",
 			Detail:  err.Error(),
@@ -331,7 +344,7 @@ func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, 
 }
 
 // ValidatePackage validates the supplier's signature, links package to the session
-func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID string) (*models.Package, *DBError) {
+func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID string) (*models.Package, *RepositoryError) {
 	dbTx := r.db.Begin()
 
 	var pkg models.Package
@@ -339,13 +352,13 @@ func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID str
 	if err != nil {
 		dbTx.Rollback()
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, &DBError{
+			return nil, &RepositoryError{
 				Code:    "ENTITY_NOT_FOUND",
 				Message: "Package does not exist",
 				Detail:  fmt.Sprintf("Package with id %s does not exist", packageID),
 			}
 		}
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "Database error",
 			Detail:  err.Error(),
@@ -360,7 +373,7 @@ func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID str
 	err = dbTx.Save(&pkg).Error
 	if err != nil {
 		dbTx.Rollback()
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "UPDATE_FAILED",
 			Message: "Failed to update package",
 			Detail:  err.Error(),
@@ -369,7 +382,7 @@ func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID str
 
 	err = dbTx.Commit().Error
 	if err != nil {
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "COMMIT_FAILED",
 			Message: "Failed to commit transaction",
 			Detail:  err.Error(),
@@ -380,7 +393,7 @@ func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID str
 }
 
 // QualityCheck adds a QC Record to a Package
-func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string) (*models.Package, *models.QCRecord, *DBError) {
+func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string) (*models.Package, *models.QCRecord, *RepositoryError) {
 	dbTx := r.db.Begin()
 
 	var session models.Session
@@ -388,13 +401,13 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 	if err != nil {
 		dbTx.Rollback()
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, &DBError{
+			return nil, nil, &RepositoryError{
 				Code:    "ENTITY_NOT_FOUND",
 				Message: "Session does not exist",
 				Detail:  fmt.Sprintf("Session with id %s does not exist", sessionID),
 			}
 		}
-		return nil, nil, &DBError{
+		return nil, nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "Database error",
 			Detail:  err.Error(),
@@ -407,13 +420,13 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 	if err != nil {
 		dbTx.Rollback()
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, &DBError{
+			return nil, nil, &RepositoryError{
 				Code:    "ENTITY_NOT_FOUND",
 				Message: "Package does not exist",
 				Detail:  fmt.Sprintf("Package associated with session %s does not exist", sessionID),
 			}
 		}
-		return nil, nil, &DBError{
+		return nil, nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "Database error",
 			Detail:  err.Error(),
@@ -423,7 +436,7 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 	// Ensure package status is appropriate for QC
 	if pkg.Status != "validated" {
 		dbTx.Rollback()
-		return nil, nil, &DBError{
+		return nil, nil, &RepositoryError{
 			Code:    "INVALID_STATE",
 			Message: "Package is not ready for QC",
 			Detail:  fmt.Sprintf("Package status is %s, must be 'validated'", pkg.Status),
@@ -436,7 +449,7 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 		issuesBytes, err := json.Marshal(issues)
 		if err != nil {
 			dbTx.Rollback()
-			return nil, nil, &DBError{
+			return nil, nil, &RepositoryError{
 				Code:    "MARSHALING_ERROR",
 				Message: "Failed to process issues data",
 				Detail:  err.Error(),
@@ -464,7 +477,7 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 	err = dbTx.Create(&qcRecord).Error
 	if err != nil {
 		dbTx.Rollback()
-		return nil, nil, &DBError{
+		return nil, nil, &RepositoryError{
 			Code:    "INSERT_FAILED",
 			Message: "Failed to create QC record",
 			Detail:  err.Error(),
@@ -482,7 +495,7 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 	err = dbTx.Save(&pkg).Error
 	if err != nil {
 		dbTx.Rollback()
-		return nil, nil, &DBError{
+		return nil, nil, &RepositoryError{
 			Code:    "UPDATE_FAILED",
 			Message: "Failed to update package status",
 			Detail:  err.Error(),
@@ -492,7 +505,7 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 	// Commit transaction
 	err = dbTx.Commit().Error
 	if err != nil {
-		return nil, nil, &DBError{
+		return nil, nil, &RepositoryError{
 			Code:    "COMMIT_FAILED",
 			Message: "Failed to commit transaction",
 			Detail:  err.Error(),
@@ -503,7 +516,7 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 }
 
 // LabelPackage adds a label to the package
-func (r *Repository) LabelPackage(sessionID, label, destination, priority, courierID string) (*models.Label, *DBError) {
+func (r *Repository) LabelPackage(sessionID, label, destination, priority, courierID string) (*models.Label, *RepositoryError) {
 	dbTx := r.db.Begin()
 
 	log.Printf("Creating label for session: %s, destination: %s, priority: %s, courierID: %s",
@@ -515,13 +528,13 @@ func (r *Repository) LabelPackage(sessionID, label, destination, priority, couri
 		dbTx.Rollback()
 		log.Printf("Session lookup error: %v", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, &DBError{
+			return nil, &RepositoryError{
 				Code:    "ENTITY_NOT_FOUND",
 				Message: "Session does not exist",
 				Detail:  fmt.Sprintf("Session with id %s does not exist", sessionID),
 			}
 		}
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "A database error occurred",
 			Detail:  err.Error(),
@@ -535,13 +548,13 @@ func (r *Repository) LabelPackage(sessionID, label, destination, priority, couri
 		dbTx.Rollback()
 		log.Printf("Package lookup error: %v", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, &DBError{
+			return nil, &RepositoryError{
 				Code:    "ENTITY_NOT_FOUND",
 				Message: "No package found for this session",
 				Detail:  fmt.Sprintf("No package found for session %s", sessionID),
 			}
 		}
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "A database error occurred",
 			Detail:  err.Error(),
@@ -555,13 +568,13 @@ func (r *Repository) LabelPackage(sessionID, label, destination, priority, couri
 		dbTx.Rollback()
 		log.Printf("Courier lookup error: %v", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, &DBError{
+			return nil, &RepositoryError{
 				Code:    "ENTITY_NOT_FOUND",
 				Message: "Courier does not exist",
 				Detail:  fmt.Sprintf("Courier with id %s does not exist", courierID),
 			}
 		}
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "A database error occurred",
 			Detail:  err.Error(),
@@ -589,7 +602,7 @@ func (r *Repository) LabelPackage(sessionID, label, destination, priority, couri
 	if err != nil {
 		dbTx.Rollback()
 		log.Printf("Failed to create label: %v", err)
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "Failed to create label",
 			Detail:  err.Error(),
@@ -601,7 +614,7 @@ func (r *Repository) LabelPackage(sessionID, label, destination, priority, couri
 	if err != nil {
 		dbTx.Rollback()
 		log.Printf("Failed to verify label creation: %v", err)
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "Label created but couldn't be verified",
 			Detail:  err.Error(),
@@ -612,7 +625,7 @@ func (r *Repository) LabelPackage(sessionID, label, destination, priority, couri
 	err = dbTx.Commit().Error
 	if err != nil {
 		log.Printf("Failed to commit transaction: %v", err)
-		return nil, &DBError{
+		return nil, &RepositoryError{
 			Code:    "COMMIT_FAILED",
 			Message: "Failed to commit transaction",
 			Detail:  err.Error(),
@@ -630,4 +643,211 @@ func (r *Repository) LabelPackage(sessionID, label, destination, priority, couri
 	}
 
 	return &newLabel, nil
+}
+
+// CommitSession commits the session to L1
+func (r *Repository) CommitSession(sessionID, operatorID string) (*models.Transaction, *RepositoryError) {
+	dbTx := r.db.Begin()
+
+	var session models.Session
+	err := dbTx.Where("session_id = ?", sessionID).First(&session).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, &RepositoryError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "Session does not exist",
+				Detail:  fmt.Sprintf("Session with id %s does not exist", sessionID),
+			}
+		}
+		pgErr, isPgError := err.(*pgconn.PgError)
+		if isPgError {
+			return nil, &RepositoryError{
+				Code:    pgErr.Code,
+				Detail:  pgErr.Detail,
+				Message: pgErr.Message,
+			}
+		}
+		return nil, &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "a database error occured",
+			Detail:  err.Error(),
+		}
+	}
+
+	if session.Status == "committed" {
+		return nil, &RepositoryError{
+			Code:    "CONFLICT",
+			Message: "Session already committed",
+			Detail:  "the session is already committed",
+		}
+	}
+
+	if operatorID != session.OperatorID {
+		return nil, &RepositoryError{
+			Code:    "UNAUTHORIZED",
+			Message: "Authorization Failed",
+			Detail:  "you are not authorized to commit this session",
+		}
+	}
+
+	var pkg *models.Package
+	err = dbTx.Preload("Items").Preload("QCRecords").Preload("QCRecords.Inspector").Where("session_id = ?", session.ID).First(&pkg).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, &RepositoryError{
+				Code:    "INVALID_STATE",
+				Message: "Session not ready for commit",
+				Detail:  fmt.Sprintf("Session %s does not have a package associated to it", sessionID),
+			}
+		}
+		pgErr, isPgError := err.(*pgconn.PgError)
+		if isPgError {
+			return nil, &RepositoryError{
+				Code:    pgErr.Code,
+				Detail:  pgErr.Detail,
+				Message: pgErr.Message,
+			}
+		}
+		return nil, &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "a database error occured",
+			Detail:  err.Error(),
+		}
+	}
+	if pkg.Status != "qc_passed" {
+		dbTx.Rollback()
+		return nil, &RepositoryError{
+			Code:    "INVALID_STATE",
+			Message: "Package not ready for commit",
+			Detail:  fmt.Sprintf("Package status is %s, must be 'qc_passed'", pkg.Status),
+		}
+	}
+	var label models.Label
+	err = dbTx.Where("package_id = ?", pkg.ID).First(&label).Error
+	if err != nil {
+		dbTx.Rollback()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, &RepositoryError{
+				Code:    "INVALID_STATE",
+				Message: "Package not labeled",
+				Detail:  "Package must be labeled before committing",
+			}
+		}
+		return nil, &RepositoryError{
+			Code:    "INVALID_STATE",
+			Message: "Package not ready for commit",
+			Detail:  fmt.Sprintf("Package %s, is not yet labelled", pkg.ID),
+		}
+	}
+
+	// Create consensus transaction payload
+	sessionData := map[string]interface{}{
+		"session_id":  session.ID,
+		"package_id":  pkg.ID,
+		"operator_id": session.OperatorID,
+		"items":       pkg.Items,
+		"qc_records":  pkg.QCRecords,
+		"labels":      []models.Label{label},
+		"commit_time": time.Now().UTC(),
+	}
+
+	// Run consensus
+	consensusResult, consensusErr := r.RunConsensus(context.Background(), sessionData)
+	if consensusErr != nil {
+		dbTx.Rollback()
+		return nil, consensusErr
+	}
+
+	tx := models.Transaction{
+		TxHash:      consensusResult.TxHash,
+		SessionID:   session.ID,
+		BlockHeight: consensusResult.BlockHeight,
+		Timestamp:   time.Now().UTC(),
+		Status:      "confirmed",
+	}
+	session.IsCommitted = true
+	session.Status = "committed"
+	session.TxHash = &tx.TxHash // Assuming TxHash field exists in Session model
+
+	err = dbTx.Save(&session).Error
+	if err != nil {
+		dbTx.Rollback()
+		return nil, &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to update session status",
+			Detail:  err.Error(),
+		}
+	}
+	pkg.Status = "committed"
+	err = dbTx.Save(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		return nil, &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to update package status",
+			Detail:  err.Error(),
+		}
+	}
+	err = dbTx.Create(&tx).Error
+	if err != nil {
+		dbTx.Rollback()
+		return nil, &RepositoryError{
+			Code:    "CONSENSUS_ERROR",
+			Message: "a consensus error occurred",
+			Detail:  err.Error(),
+		}
+	}
+
+	err = dbTx.Commit().Error
+	if err != nil {
+		return nil, &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to commit database transaction",
+			Detail:  err.Error(),
+		}
+	}
+	return &tx, nil
+}
+
+// RunConsensus handles submitting data to the blockchain and waiting for consensus. For L2, this runs a consensus simulation
+func (r *Repository) RunConsensus(ctx context.Context, payload ConsensusPayload) (*ConsensusResult, *RepositoryError) {
+	// Serialize the payload
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, &RepositoryError{
+			Code:    "SERIALIZATION_ERROR",
+			Message: "Failed to serialize consensus payload",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Create consensus transaction
+	consensusTx := cmttypes.Tx(payloadBytes)
+
+	// Broadcast to blockchain and wait for commit
+	consensusResponse, err := r.rpcClient.BroadcastTxCommit(ctx, consensusTx)
+	if err != nil {
+		return nil, &RepositoryError{
+			Code:    "CONSENSUS_ERROR",
+			Message: "Failed to commit to blockchain",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Check for errors in the response
+	consensusErrorExists := consensusResponse.CheckTx.Code != 0
+	if consensusErrorExists {
+		return nil, &RepositoryError{
+			Code:    "CONSENSUS_ERROR",
+			Message: "Blockchain rejected transaction",
+			Detail:  fmt.Sprintf("CheckTx code: %d", consensusResponse.CheckTx.Code),
+		}
+	}
+
+	// Return success result
+	return &ConsensusResult{
+		TxHash:      hex.EncodeToString(consensusResponse.Hash),
+		BlockHeight: consensusResponse.Height,
+		Code:        consensusResponse.CheckTx.Code,
+	}, nil
 }

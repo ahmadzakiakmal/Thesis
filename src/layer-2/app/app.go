@@ -214,44 +214,44 @@ func (app *Application) verifyTransaction(txID []byte) (*abcitypes.QueryResponse
 
 // CheckTx implements the ABCI CheckTx method
 func (app *Application) CheckTx(_ context.Context, check *abcitypes.CheckTxRequest) (*abcitypes.CheckTxResponse, error) {
-	tx := check.Tx
+	// tx := check.Tx
 
-	// Log the raw bytes in various formats
-	app.logger.Info("CheckTx raw transaction",
-		"as_string", string(tx),
-	)
+	// // Log the raw bytes in various formats
+	// app.logger.Info("CheckTx raw transaction",
+	// 	"as_string", string(tx),
+	// )
 
-	var consensusTx service_registry.Transaction
-	if err := json.Unmarshal(tx, &consensusTx); err != nil {
-		app.logger.Error("Failed to parse transaction",
-			"error", err.Error(),
-		)
-		return &abcitypes.CheckTxResponse{
-			Code: 1, // Non-zero means error
-			Log:  fmt.Sprintf("Invalid transaction format: %v", err),
-		}, nil
-	}
+	// var consensusTx service_registry.Transaction
+	// if err := json.Unmarshal(tx, &consensusTx); err != nil {
+	// 	app.logger.Error("Failed to parse transaction",
+	// 		"error", err.Error(),
+	// 	)
+	// 	return &abcitypes.CheckTxResponse{
+	// 		Code: 1, // Non-zero means error
+	// 		Log:  fmt.Sprintf("Invalid transaction format: %v", err),
+	// 	}, nil
+	// }
 
-	app.logger.Info("Parsed transaction",
-		"request_method", consensusTx.Request.Method,
-		"request_path", consensusTx.Request.Path,
-		"request_id", consensusTx.Request.RequestID,
-		"origin_node", consensusTx.OriginNodeID,
-	)
+	// app.logger.Info("Parsed transaction",
+	// 	"request_method", consensusTx.Request.Method,
+	// 	"request_path", consensusTx.Request.Path,
+	// 	"request_id", consensusTx.Request.RequestID,
+	// 	"origin_node", consensusTx.OriginNodeID,
+	// )
 
-	if consensusTx.Response.StatusCode == 0 {
-		return &abcitypes.CheckTxResponse{
-			Code: 2,
-			Log:  "Invalid response status code",
-		}, fmt.Errorf("invalid response status code")
-	}
+	// if consensusTx.Response.StatusCode == 0 {
+	// 	return &abcitypes.CheckTxResponse{
+	// 		Code: 2,
+	// 		Log:  "Invalid response status code",
+	// 	}, fmt.Errorf("invalid response status code")
+	// }
 
-	if consensusTx.Request.RequestID == "" || consensusTx.OriginNodeID == "" {
-		return &abcitypes.CheckTxResponse{
-			Code: 2,
-			Log:  "Missing required fields in transaction",
-		}, fmt.Errorf("missing required fields in transaction")
-	}
+	// if consensusTx.Request.RequestID == "" || consensusTx.OriginNodeID == "" {
+	// 	return &abcitypes.CheckTxResponse{
+	// 		Code: 2,
+	// 		Log:  "Missing required fields in transaction",
+	// 	}, fmt.Errorf("missing required fields in transaction")
+	// }
 
 	// Accept any transaction for now
 	return &abcitypes.CheckTxResponse{Code: 0}, nil

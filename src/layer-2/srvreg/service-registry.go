@@ -228,6 +228,8 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 	sr.RegisterHandler("POST", "/session/:id/qc", false, sr.QualityCheckHandler)
 	// Label Package Endpoint
 	sr.RegisterHandler("POST", "/session/:id/label", false, sr.LabelPackageHandler)
+	// Commit Session Endpoint
+	sr.RegisterHandler("POST", "/session/:id/commit", false, sr.CommitSessionHandler)
 }
 
 // GenerateResponse executes the request and generates a response

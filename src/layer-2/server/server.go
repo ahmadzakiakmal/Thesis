@@ -442,6 +442,7 @@ func (ws *WebServer) handleSessionAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TODO: move to use repository method
 	// Simulate transaction
 	consensusResponse, err := ws.cometBftRpcClient.BroadcastTxCommit(context.Background(), txBytes)
 	if consensusResponse.CheckTx.GetCode() != 0 {
