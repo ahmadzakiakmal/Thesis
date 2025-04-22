@@ -14,7 +14,6 @@ import (
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
-	"gorm.io/gorm"
 )
 
 // Request represents the client's original HTTP request
@@ -138,7 +137,7 @@ func ConvertHttpRequestToConsensusRequest(r *http.Request, requestID string) (*R
 }
 
 // NewServiceRegistry creates a new service registry
-func NewServiceRegistry(db *gorm.DB, repository *repository.Repository, logger cmtlog.Logger, isByzantine bool) *ServiceRegistry {
+func NewServiceRegistry(repository *repository.Repository, logger cmtlog.Logger, isByzantine bool) *ServiceRegistry {
 	return &ServiceRegistry{
 		handlers:    make(map[RouteKey]ServiceHandler),
 		exactRoutes: make(map[RouteKey]bool),

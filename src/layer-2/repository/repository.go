@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository/models"
+	cmtrpc "github.com/cometbft/cometbft/rpc/client/local"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -67,37 +68,35 @@ type DBError struct {
 }
 
 type Repository struct {
-	DB  *gorm.DB
-	dsn string
+	db          *gorm.DB
+	rpcClient   *cmtrpc.Local
+	l1Addresses []string
 }
 
-func NewDatabaseService(dsn string) *Repository {
-	return &Repository{
-		DB:  nil,
-		dsn: dsn,
-	}
+func NewRepository() *Repository {
+	return &Repository{}
 }
 
-func (r *Repository) Connect() {
+func (r *Repository) ConnectDB(dsn string) {
 	for i := range 10 {
 		log.Printf("Connection attempt %d...\n", i+1)
-		DB, err := gorm.Open(postgres.Open(r.dsn))
+		DB, err := gorm.Open(postgres.Open(dsn))
 		if err != nil {
 			log.Printf("Connection attempt %d, failed: %v\n", i+1, err)
 			time.Sleep(2 * time.Second)
 		} else {
 			break
 		}
-		r.DB = DB
+		r.db = DB
 	}
 }
 
 func (r *Repository) Migrate() {
 	// Migrate existing User model
-	r.DB.AutoMigrate(&models.User{})
+	r.db.AutoMigrate(&models.User{})
 
 	// Migrate all supply chain system models
-	r.DB.AutoMigrate(
+	r.db.AutoMigrate(
 		&models.User{}, // This one is for testing only
 		&models.Courier{},
 		&models.Session{},
@@ -118,7 +117,7 @@ func (r *Repository) Migrate() {
 func (r *Repository) Seed() {
 	// Check if data already exists to avoid duplicates
 	var supplierCount int64
-	r.DB.Model(&models.Supplier{}).Count(&supplierCount)
+	r.db.Model(&models.Supplier{}).Count(&supplierCount)
 
 	if supplierCount > 0 {
 		log.Println("Seed data already exists, skipping...")
@@ -137,7 +136,7 @@ func (r *Repository) Seed() {
 	}
 
 	for _, supplier := range suppliers {
-		if err := r.DB.Create(&supplier).Error; err != nil {
+		if err := r.db.Create(&supplier).Error; err != nil {
 			log.Printf("Error creating supplier %s: %v", supplier.ID, err)
 		}
 	}
@@ -153,7 +152,7 @@ func (r *Repository) Seed() {
 	}
 
 	for _, operator := range operators {
-		if err := r.DB.Create(&operator).Error; err != nil {
+		if err := r.db.Create(&operator).Error; err != nil {
 			log.Printf("Error creating operator %s: %v", operator.ID, err)
 		}
 	}
@@ -171,7 +170,7 @@ func (r *Repository) Seed() {
 	}
 
 	for _, item := range catalogItems {
-		if err := r.DB.Create(&item).Error; err != nil {
+		if err := r.db.Create(&item).Error; err != nil {
 			log.Printf("Error creating catalog item %s: %v", item.ID, err)
 		}
 	}
@@ -186,7 +185,7 @@ func (r *Repository) Seed() {
 	}
 
 	for _, courier := range couriers {
-		if err := r.DB.Create(&courier).Error; err != nil {
+		if err := r.db.Create(&courier).Error; err != nil {
 			log.Printf("Error creating courier %s: %v", courier.ID, err)
 		}
 	}
@@ -201,7 +200,7 @@ func (r *Repository) Seed() {
 	}
 
 	for _, pkg := range packages {
-		if err := r.DB.Create(&pkg).Error; err != nil {
+		if err := r.db.Create(&pkg).Error; err != nil {
 			log.Printf("Error creating package %s: %v", pkg.ID, err)
 		}
 	}
@@ -221,12 +220,17 @@ func (r *Repository) Seed() {
 	}
 
 	for _, item := range items {
-		if err := r.DB.Create(&item).Error; err != nil {
+		if err := r.db.Create(&item).Error; err != nil {
 			log.Printf("Error creating item %s: %v", item.ID, err)
 		}
 	}
 
 	log.Println("Database seeding completed successfully")
+}
+
+func (r *Repository) SetupRpcClient(rpcClient *cmtrpc.Local, l1Addresses []string) {
+	r.rpcClient = rpcClient
+	r.l1Addresses = l1Addresses
 }
 
 func ptrString(s string) *string {
@@ -244,7 +248,7 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 		OperatorID:  operatorID,
 	}
 
-	dbTx := r.DB.Begin()
+	dbTx := r.db.Begin()
 	err := dbTx.Create(&session).Error
 	if err != nil {
 		dbTx.Rollback()
@@ -279,7 +283,7 @@ func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Sessio
 // ScanPackage returns the expected item and signature of the package
 func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, *DBError) {
 	// Begin transaction
-	dbTx := r.DB.Begin()
+	dbTx := r.db.Begin()
 
 	// Find the package by ID with preloaded items and supplier
 	var pkg models.Package
@@ -328,7 +332,7 @@ func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, 
 
 // ValidatePackage validates the supplier's signature, links package to the session
 func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID string) (*models.Package, *DBError) {
-	dbTx := r.DB.Begin()
+	dbTx := r.db.Begin()
 
 	var pkg models.Package
 	err := dbTx.Preload("Items").Preload("Supplier").Where("package_id = ?", packageID).First(&pkg).Error
@@ -377,7 +381,7 @@ func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID str
 
 // QualityCheck adds a QC Record to a Package
 func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string) (*models.Package, *models.QCRecord, *DBError) {
-	dbTx := r.DB.Begin()
+	dbTx := r.db.Begin()
 
 	var session models.Session
 	err := dbTx.Where("session_id = ?", sessionID).First(&session).Error
@@ -500,7 +504,7 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 
 // LabelPackage adds a label to the package
 func (r *Repository) LabelPackage(sessionID, label, destination, priority, courierID string) (*models.Label, *DBError) {
-	dbTx := r.DB.Begin()
+	dbTx := r.db.Begin()
 
 	log.Printf("Creating label for session: %s, destination: %s, priority: %s, courierID: %s",
 		sessionID, destination, priority, courierID)
@@ -618,7 +622,7 @@ func (r *Repository) LabelPackage(sessionID, label, destination, priority, couri
 	log.Printf("Transaction committed successfully, label created: %s", labelID)
 
 	var finalCheck models.Label
-	err = r.DB.Where("label_id = ?", labelID).First(&finalCheck).Error
+	err = r.db.Where("label_id = ?", labelID).First(&finalCheck).Error
 	if err != nil {
 		log.Printf("WARNING: Label not found after commit: %v", err)
 	} else {

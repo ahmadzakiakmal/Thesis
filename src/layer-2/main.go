@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,21 +23,24 @@ import (
 	"github.com/cometbft/cometbft/p2p"
 	"github.com/cometbft/cometbft/privval"
 	"github.com/cometbft/cometbft/proxy"
+	cmtrpc "github.com/cometbft/cometbft/rpc/client/local"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/spf13/viper"
 )
 
 var (
-	homeDir      string
-	httpPort     string
-	postgresHost string
-	isByzantine  bool
+	homeDir           string
+	httpPort          string
+	postgresHost      string
+	isByzantine       bool
+	l1RpcAddressesStr string
 )
 
 func init() {
 	flag.StringVar(&homeDir, "cmt-home", "./node-config/simulator-node", "Path to the CometBFT config directory")
-	flag.StringVar(&httpPort, "http-port", "5000", "HTTP web server port")
+	flag.StringVar(&httpPort, "http-port", "6000", "HTTP web server port")
 	flag.StringVar(&postgresHost, "postgres-host", "postgres-l2:5432", "DB host address")
+	flag.StringVar(&l1RpcAddressesStr, "l1-rpc-addresses", "", "Comma-separated list of Layer-1 RPC addresses")
 	flag.BoolVar(&isByzantine, "byzantine", false, "Byzantine Option")
 }
 
@@ -62,11 +66,12 @@ func main() {
 
 	// Connect Postgresql DB
 	dsn := fmt.Sprintf("postgresql://postgres:postgrespassword@%s/postgres", postgresHost)
-	repository := repository.NewDatabaseService(dsn)
-	repository.Connect()
+	// Instantiate Rpc Client
+	// rpcClient := cmtrpc.New(node)
+	repository := repository.NewRepository()
+	repository.ConnectDB(dsn)
 	repository.Migrate()
 	repository.Seed()
-	postgresDB := repository.DB
 	log.Printf("Connecting to: %s\n", dsn)
 
 	// Initialize Badger DB
@@ -90,10 +95,10 @@ func main() {
 	logger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
 
 	// Initialize Service Registry
-	serviceRegistry := service_registry.NewServiceRegistry(postgresDB, repository, logger, false)
+	serviceRegistry := service_registry.NewServiceRegistry(repository, logger, false)
 	serviceRegistry.RegisterDefaultServices()
 
-	app := app.NewABCIApplication(db, serviceRegistry, appConfig, logger, postgresDB)
+	app := app.NewABCIApplication(db, serviceRegistry, appConfig, logger, repository)
 
 	// Private Validator
 	pv := privval.LoadFilePV(
@@ -131,6 +136,11 @@ func main() {
 	// Pass Node ID to app
 	app.SetNodeID(string(node.NodeInfo().ID()))
 
+	// Instantiate rpc client from node
+	rpcClient := cmtrpc.New(node)
+	l1RpcAddresses := strings.Split(l1RpcAddressesStr, ",")
+	repository.SetupRpcClient(rpcClient, l1RpcAddresses)
+
 	// Start CometBFT node
 	node.Start()
 	defer func() {
@@ -139,7 +149,7 @@ func main() {
 	}()
 
 	// Start Web Server
-	webserver, err := server.NewWebServer(app, httpPort, logger, node, serviceRegistry, postgresDB)
+	webserver, err := server.NewWebServer(app, httpPort, logger, node, serviceRegistry, repository)
 	if err != nil {
 		log.Fatalf("Creating web server: %v", err)
 	}

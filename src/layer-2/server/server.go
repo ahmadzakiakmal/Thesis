@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/app"
+	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository"
 	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/srvreg"
 
 	cmtlog "github.com/cometbft/cometbft/libs/log"
@@ -20,7 +21,6 @@ import (
 	"github.com/cometbft/cometbft/rpc/client"
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
 	cmtrpc "github.com/cometbft/cometbft/rpc/client/local"
-	"gorm.io/gorm"
 )
 
 // WebServer handles HTTP requests
@@ -35,7 +35,7 @@ type WebServer struct {
 	cometBftHttpClient client.Client
 	cometBftRpcClient  *cmtrpc.Local
 	peers              map[string]string // nodeID -> RPC URL
-	database           *gorm.DB
+	repository         *repository.Repository
 }
 
 // TransactionStatus represents the consensus status of a transaction
@@ -80,7 +80,7 @@ type ClientResponse struct {
 }
 
 // NewWebServer creates a new web server
-func NewWebServer(app *app.Application, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *service_registry.ServiceRegistry, db *gorm.DB) (*WebServer, error) {
+func NewWebServer(app *app.Application, httpPort string, logger cmtlog.Logger, node *nm.Node, serviceRegistry *service_registry.ServiceRegistry, repository *repository.Repository) (*WebServer, error) {
 	mux := http.NewServeMux()
 
 	rpcAddr := fmt.Sprintf("http://localhost:%s", extractPortFromAddress(node.Config().RPC.ListenAddress))
@@ -115,7 +115,7 @@ func NewWebServer(app *app.Application, httpPort string, logger cmtlog.Logger, n
 		cometBftHttpClient: cometBftHttpClient,
 		cometBftRpcClient:  cmtrpc.New(node),
 		peers:              make(map[string]string),
-		database:           db,
+		repository:         repository,
 	}
 
 	// Register routes

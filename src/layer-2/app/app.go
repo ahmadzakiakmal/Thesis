@@ -11,23 +11,23 @@ import (
 	"log"
 	"sync"
 
+	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository"
 	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/srvreg"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"github.com/dgraph-io/badger/v4"
-	"gorm.io/gorm"
 )
 
 // Application implements the ABCI interface for the nodes
 type Application struct {
 	badgerDB        *badger.DB
-	postgresDB      *gorm.DB
 	onGoingBlock    *badger.Txn
 	serviceRegistry *service_registry.ServiceRegistry
 	nodeID          string
 	mu              sync.Mutex
 	config          *AppConfig
 	logger          cmtlog.Logger
+	repository      *repository.Repository
 }
 
 // AppConfig contains configuration for the application
@@ -38,14 +38,14 @@ type AppConfig struct {
 }
 
 // NewABCIApplication creates a new  application
-func NewABCIApplication(badgerDB *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *AppConfig, logger cmtlog.Logger, db *gorm.DB) *Application {
+func NewABCIApplication(badgerDB *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *AppConfig, logger cmtlog.Logger, repository *repository.Repository) *Application {
 	return &Application{
 		badgerDB:        badgerDB,
 		serviceRegistry: serviceRegistry,
 		nodeID:          "",
 		config:          config,
 		logger:          logger,
-		postgresDB:      db,
+		repository:      repository,
 	}
 }
 
