@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository/models"
@@ -86,10 +89,16 @@ type Repository struct {
 	db          *gorm.DB
 	rpcClient   *cmtrpc.Local
 	l1Addresses []string
+	httpClient  *http.Client
 }
 
 func NewRepository() *Repository {
-	return &Repository{}
+	httpClient := http.Client{
+		Timeout: 10 * time.Second,
+	}
+	return &Repository{
+		httpClient: &httpClient,
+	}
 }
 
 func (r *Repository) ConnectDB(dsn string) {
@@ -395,7 +404,7 @@ func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID str
 }
 
 // QualityCheck adds a QC Record to a Package
-func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string) (*models.Package, *models.QCRecord, *RepositoryError) {
+func (r *Repository) QualityCheck(sessionID string, qcPassed bool, issues []string) (*models.Package, *models.QCRecord, *RepositoryError) {
 	dbTx := r.db.Begin()
 
 	var session models.Session
@@ -470,7 +479,7 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 		ID:          qcID,
 		PackageID:   pkg.ID,
 		SessionID:   sessionID,
-		Passed:      passed,
+		Passed:      qcPassed,
 		InspectorID: session.OperatorID,
 		Issues:      issuesStr,
 	}
@@ -487,7 +496,7 @@ func (r *Repository) QualityCheck(sessionID string, passed bool, issues []string
 	}
 
 	// Update package status based on QC result
-	if passed {
+	if qcPassed {
 		pkg.Status = "qc_passed"
 	} else {
 		pkg.Status = "qc_failed"
@@ -742,21 +751,21 @@ func (r *Repository) CommitSession(sessionID, operatorID string) (*models.Transa
 		}
 	}
 
-	// Create consensus transaction payload
-	// sessionData := map[string]interface{}{
-	// 	"session_id":  session.ID,
-	// 	"package_id":  pkg.ID,
-	// 	"operator_id": session.OperatorID,
-	// 	"items":       pkg.Items,
-	// 	"qc_records":  pkg.QCRecords,
-	// 	"labels":      []models.Label{label},
-	// 	"commit_time": time.Now().UTC(),
-	// }
+	qcPassed := pkg.Status == "qc_passed"
+	rawIssues := pkg.QCRecords[0].Issues
+	rawIssues = rawIssues[1 : len(rawIssues)-1]
+	issues := strings.Split(rawIssues, ",")
+
+	l1Resp, repoErr := r.CommitToL1(session.ID, session.OperatorID, pkg.ID, "signature123", qcPassed, issues)
+	if repoErr != nil {
+		dbTx.Rollback()
+		return nil, repoErr
+	}
 
 	tx := models.Transaction{
-		TxHash:      "",
+		TxHash:      l1Resp.TxHash,
 		SessionID:   session.ID,
-		BlockHeight: 0,
+		BlockHeight: l1Resp.BlockHeight,
 		Status:      "confirmed",
 	}
 	session.IsCommitted = true
@@ -865,4 +874,58 @@ func (r *Repository) RunConsensus(ctx context.Context, payload ConsensusPayload)
 			Code:        result.result.CheckTx.Code,
 		}, nil
 	}
+}
+
+func (r *Repository) CommitToL1(sessionID, operatorID, packageID, supplierSignature string, qcPassed bool, issues []string) (*ConsensusResult, *RepositoryError) {
+	if len(r.l1Addresses) == 0 {
+		return nil, &RepositoryError{
+			Code:    "CONFIG_ERROR",
+			Message: "No L1 node addresses configured",
+			Detail:  "l1Addresses slice is empty",
+		}
+	}
+
+	payload := map[string]interface{}{
+		"session_id":         sessionID,
+		"operator_id":        operatorID,
+		"package_id":         packageID,
+		"supplier_signature": supplierSignature,
+		"qc_passed":          qcPassed,
+		"issues":             issues,
+		"timestamp":          time.Now(),
+		// "origin_node_id": r.node.ID,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, &RepositoryError{
+			Code:    "SERIALIZATION_ERROR",
+			Message: "Failed to serialize L1 commit payload",
+			Detail:  err.Error(),
+		}
+	}
+
+	url := fmt.Sprintf("http:/%s/api/commit", r.l1Addresses[0])
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return nil, &RepositoryError{
+			Code:    "REQUEST_ERROR",
+			Message: "Failed to create HTTP request",
+			Detail:  err.Error(),
+		}
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, &RepositoryError{
+			Code:    "NETWORK_ERROR",
+			Message: "Failed to connect to L1 node",
+			Detail:  err.Error(),
+		}
+	}
+	defer resp.Body.Close()
+
+	return &ConsensusResult{}, nil
 }

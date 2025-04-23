@@ -2,8 +2,8 @@
 
 # Default values
 NODE_COUNT=1  # Changed default to 1 instead of 4
-BASE_P2P_PORT=9001
-BASE_RPC_PORT=9000
+BASE_P2P_PORT=10001
+BASE_RPC_PORT=10000
 BASE_HTTP_PORT=6000
 BASE_DIR="./node-config"
 DISABLE_EMPTY_BLOCKS=false
