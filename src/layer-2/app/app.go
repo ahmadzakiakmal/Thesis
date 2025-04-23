@@ -12,7 +12,7 @@ import (
 	"sync"
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository"
-	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-2/srvreg"
+	"github.com/ahmadzakiakmal/thesis/src/layer-2/srvreg"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"github.com/dgraph-io/badger/v4"
@@ -22,7 +22,7 @@ import (
 type Application struct {
 	badgerDB        *badger.DB
 	onGoingBlock    *badger.Txn
-	serviceRegistry *service_registry.ServiceRegistry
+	serviceRegistry *srvreg.ServiceRegistry
 	nodeID          string
 	mu              sync.Mutex
 	config          *AppConfig
@@ -38,7 +38,7 @@ type AppConfig struct {
 }
 
 // NewABCIApplication creates a new  application
-func NewABCIApplication(badgerDB *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *AppConfig, logger cmtlog.Logger, repository *repository.Repository) *Application {
+func NewABCIApplication(badgerDB *badger.DB, serviceRegistry *srvreg.ServiceRegistry, config *AppConfig, logger cmtlog.Logger, repository *repository.Repository) *Application {
 	return &Application{
 		badgerDB:        badgerDB,
 		serviceRegistry: serviceRegistry,
@@ -214,46 +214,17 @@ func (app *Application) verifyTransaction(txID []byte) (*abcitypes.QueryResponse
 
 // CheckTx implements the ABCI CheckTx method
 func (app *Application) CheckTx(_ context.Context, check *abcitypes.CheckTxRequest) (*abcitypes.CheckTxResponse, error) {
-	// tx := check.Tx
+	txBytes := check.Tx
+	fmt.Println("[CHECKTX]:")
 
-	// // Log the raw bytes in various formats
-	// app.logger.Info("CheckTx raw transaction",
-	// 	"as_string", string(tx),
-	// )
+	var tx srvreg.Transaction
+	err := json.Unmarshal(txBytes, &tx)
+	if err != nil {
+		return &abcitypes.CheckTxResponse{Code: 1}, fmt.Errorf("fail to parse tx on CheckTx: %s", err.Error())
+	}
+	fmt.Println("[CHECKTX_REQ]:")
+	fmt.Println(tx.Request)
 
-	// var consensusTx service_registry.Transaction
-	// if err := json.Unmarshal(tx, &consensusTx); err != nil {
-	// 	app.logger.Error("Failed to parse transaction",
-	// 		"error", err.Error(),
-	// 	)
-	// 	return &abcitypes.CheckTxResponse{
-	// 		Code: 1, // Non-zero means error
-	// 		Log:  fmt.Sprintf("Invalid transaction format: %v", err),
-	// 	}, nil
-	// }
-
-	// app.logger.Info("Parsed transaction",
-	// 	"request_method", consensusTx.Request.Method,
-	// 	"request_path", consensusTx.Request.Path,
-	// 	"request_id", consensusTx.Request.RequestID,
-	// 	"origin_node", consensusTx.OriginNodeID,
-	// )
-
-	// if consensusTx.Response.StatusCode == 0 {
-	// 	return &abcitypes.CheckTxResponse{
-	// 		Code: 2,
-	// 		Log:  "Invalid response status code",
-	// 	}, fmt.Errorf("invalid response status code")
-	// }
-
-	// if consensusTx.Request.RequestID == "" || consensusTx.OriginNodeID == "" {
-	// 	return &abcitypes.CheckTxResponse{
-	// 		Code: 2,
-	// 		Log:  "Missing required fields in transaction",
-	// 	}, fmt.Errorf("missing required fields in transaction")
-	// }
-
-	// Accept any transaction for now
 	return &abcitypes.CheckTxResponse{Code: 0}, nil
 }
 
@@ -271,43 +242,30 @@ func (app *Application) PrepareProposal(_ context.Context, proposal *abcitypes.P
 
 // ProcessProposal implements the ABCI ProcessProposal method
 func (app *Application) ProcessProposal(_ context.Context, proposal *abcitypes.ProcessProposalRequest) (*abcitypes.ProcessProposalResponse, error) {
-	// Process the proposed block
-	for _, tx := range proposal.Txs {
-		var dewsTx service_registry.Transaction
-		if err := json.Unmarshal(tx, &dewsTx); err != nil {
-			// If we can't parse the transaction, we reject the proposal
-			return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, nil
-		}
-		isNotOrigin := dewsTx.OriginNodeID != app.nodeID
-		app.logger.Info("Process Proposal", "Tx Origin", dewsTx.OriginNodeID, "ID", app.nodeID)
-		if isNotOrigin {
-			app.logger.Info("Process Proposal", "Is the proposer?", "false")
-		} else {
-			app.logger.Info("Process Proposal", "Is the proposer?", "true")
-		}
+	fmt.Println("[PROCESSPROPOSAL]:")
+	for i, txBytes := range proposal.Txs {
+		fmt.Printf("%d, TX:\n", i)
+		var tx *srvreg.Transaction
+		json.Unmarshal(txBytes, &tx)
+		fmt.Println(tx.Request)
+		fmt.Println(tx.Response)
 
-		// Check if this node is the origin or if we need to replicate
-		if isNotOrigin {
-			// This is a transaction from another node, we need to verify it
-			// by replicating the computation
-			req := dewsTx.Request
-			resp, err := req.GenerateResponse(app.serviceRegistry)
-			if err != nil {
-				log.Printf("Error generating response for request %s: %v", req.RequestID, err)
-				// We still accept the proposal, but we'll mark the transaction as failed
-				continue
-			}
-
-			// Compare our response with the one in the transaction
-			if !compareResponses(resp, &dewsTx.Response) {
-				log.Printf("Byzantine behavior detected: responses don't match for request %s", req.RequestID)
-				// In this case, we would reject the proposal in a real system
-				// For simplicity, we'll still accept it but mark it as failed
+		isTxOriginator := app.nodeID == tx.OriginNodeID
+		if !isTxOriginator {
+			// Replicate the request and compare the response
+			handler, isHandlerFound := app.serviceRegistry.GetHandlerForPath(tx.Request.Method, tx.Request.Path)
+			if isHandlerFound {
+				response, err := handler(&tx.Request)
+				if err != nil {
+					return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, err
+				}
+				if !compareResponses(response, &tx.Response) {
+					return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT},
+						fmt.Errorf("response is different, byzantine behavior detected")
+				}
 			}
 		}
 	}
-
-	// Accept the proposal
 	return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_ACCEPT}, nil
 }
 
@@ -321,15 +279,15 @@ func (app *Application) FinalizeBlock(_ context.Context, req *abcitypes.Finalize
 	app.onGoingBlock = app.badgerDB.NewTransaction(true)
 
 	for i, txBytes := range req.Txs {
-		var tx service_registry.Transaction
+		var tx srvreg.Transaction
 
 		if err := json.Unmarshal(txBytes, &tx); err != nil {
 			txResults[i] = &abcitypes.ExecTxResult{Code: 1, Log: "Invalid transaction format"}
 			continue
 		}
 
-		// Accept all transactions at this point
 		txID := generateTxID(tx.Request.RequestID, tx.OriginNodeID)
+		// Accept all tx that made it through to this method
 		status := "accepted"
 		txResults[i] = app.storeTransaction(txID, &tx, status, txBytes)
 	}
@@ -403,7 +361,7 @@ func (app *Application) VerifyVoteExtension(_ context.Context, verify *abcitypes
 // Helper Functions
 
 // storeTransaction stores the transaction in the database
-func (app *Application) storeTransaction(txID string, tx *service_registry.Transaction, status string, rawTx []byte) *abcitypes.ExecTxResult {
+func (app *Application) storeTransaction(txID string, tx *srvreg.Transaction, status string, rawTx []byte) *abcitypes.ExecTxResult {
 	// Store the transaction
 	txKey := append([]byte("tx:"), []byte(txID)...)
 	err := app.onGoingBlock.Set(txKey, rawTx)
@@ -453,7 +411,7 @@ func (app *Application) storeTransaction(txID string, tx *service_registry.Trans
 }
 
 // compareResponses compares two DeWSResponse objects for equality
-func compareResponses(a, b *service_registry.Response) bool {
+func compareResponses(a, b *srvreg.Response) bool {
 	// Compare status code
 	if a.StatusCode != b.StatusCode {
 		return false

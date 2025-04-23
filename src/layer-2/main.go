@@ -89,7 +89,7 @@ func main() {
 	// Create ABCI Application
 	appConfig := &app.AppConfig{
 		NodeID:        filepath.Base(homeDir), // Use directory name as node ID
-		RequiredVotes: 2,
+		RequiredVotes: 1,
 		LogAllTxs:     true,
 	}
 	logger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))

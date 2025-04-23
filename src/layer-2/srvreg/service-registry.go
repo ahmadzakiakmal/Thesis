@@ -1,8 +1,10 @@
 package srvreg
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -117,12 +119,13 @@ func ConvertHttpRequestToConsensusRequest(r *http.Request, requestID string) (*R
 	// Read body if present
 	body := ""
 	if r.Body != nil {
-		// Limited to reasonable size to prevent attacks
-		bodyBytes := make([]byte, 10*1024*1024) // 10MB limit
-		n, _ := r.Body.Read(bodyBytes)
-		if n > 0 {
-			body = string(bodyBytes[:n])
+		// bodyBytes := make([]byte, 10*1024*1024) // 10MB limit to prevent attacks
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
 		}
+		raw := strings.TrimSpace(string(bodyBytes))
+		body = compactJSON(raw)
 	}
 
 	return &Request{
@@ -157,7 +160,7 @@ func (sr *ServiceRegistry) RegisterHandler(method, path string, isExactPath bool
 	sr.exactRoutes[key] = isExactPath
 }
 
-// GetHandlerForPath finds the appropriate handler for a given path
+// GetHandlerForPath finds the appropriate handler for a given path and a boolean of whether or not the handler was found
 func (sr *ServiceRegistry) GetHandlerForPath(method, path string) (ServiceHandler, bool) {
 	sr.mu.RLock()
 	defer sr.mu.RUnlock()
@@ -259,4 +262,13 @@ func (req *Request) GenerateResponse(services *ServiceRegistry) (*Response, erro
 	}
 
 	return response, err
+}
+
+func compactJSON(body string) string {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, []byte(body)); err != nil {
+		// If it’s not JSON, return trimmed original
+		return strings.TrimSpace(body)
+	}
+	return buf.String()
 }

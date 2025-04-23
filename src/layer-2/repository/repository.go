@@ -12,6 +12,7 @@ import (
 
 	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository/models"
 	cmtrpc "github.com/cometbft/cometbft/rpc/client/local"
+	cmtrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmttypes "github.com/cometbft/cometbft/types"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/postgres"
@@ -74,6 +75,7 @@ type ConsensusResult struct {
 	Error       error
 }
 
+// RepositoryError represent an error in the repository layer (db/rpc)
 type RepositoryError struct {
 	Code    string
 	Message string
@@ -741,28 +743,20 @@ func (r *Repository) CommitSession(sessionID, operatorID string) (*models.Transa
 	}
 
 	// Create consensus transaction payload
-	sessionData := map[string]interface{}{
-		"session_id":  session.ID,
-		"package_id":  pkg.ID,
-		"operator_id": session.OperatorID,
-		"items":       pkg.Items,
-		"qc_records":  pkg.QCRecords,
-		"labels":      []models.Label{label},
-		"commit_time": time.Now().UTC(),
-	}
-
-	// Run consensus
-	consensusResult, consensusErr := r.RunConsensus(context.Background(), sessionData)
-	if consensusErr != nil {
-		dbTx.Rollback()
-		return nil, consensusErr
-	}
+	// sessionData := map[string]interface{}{
+	// 	"session_id":  session.ID,
+	// 	"package_id":  pkg.ID,
+	// 	"operator_id": session.OperatorID,
+	// 	"items":       pkg.Items,
+	// 	"qc_records":  pkg.QCRecords,
+	// 	"labels":      []models.Label{label},
+	// 	"commit_time": time.Now().UTC(),
+	// }
 
 	tx := models.Transaction{
-		TxHash:      consensusResult.TxHash,
+		TxHash:      "",
 		SessionID:   session.ID,
-		BlockHeight: consensusResult.BlockHeight,
-		Timestamp:   time.Now().UTC(),
+		BlockHeight: 0,
 		Status:      "confirmed",
 	}
 	session.IsCommitted = true
@@ -824,30 +818,51 @@ func (r *Repository) RunConsensus(ctx context.Context, payload ConsensusPayload)
 	// Create consensus transaction
 	consensusTx := cmttypes.Tx(payloadBytes)
 
-	// Broadcast to blockchain and wait for commit
-	consensusResponse, err := r.rpcClient.BroadcastTxCommit(ctx, consensusTx)
-	if err != nil {
-		return nil, &RepositoryError{
-			Code:    "CONSENSUS_ERROR",
-			Message: "Failed to commit to blockchain",
-			Detail:  err.Error(),
-		}
-	}
+	// Use a channel to detect both context deadline and RPC completion
+	done := make(chan struct {
+		result *cmtrpctypes.ResultBroadcastTxCommit
+		err    error
+	}, 1)
 
-	// Check for errors in the response
-	consensusErrorExists := consensusResponse.CheckTx.Code != 0
-	if consensusErrorExists {
-		return nil, &RepositoryError{
-			Code:    "CONSENSUS_ERROR",
-			Message: "Blockchain rejected transaction",
-			Detail:  fmt.Sprintf("CheckTx code: %d", consensusResponse.CheckTx.Code),
-		}
-	}
+	go func() {
+		result, err := r.rpcClient.BroadcastTxCommit(ctx, consensusTx)
+		done <- struct {
+			result *cmtrpctypes.ResultBroadcastTxCommit
+			err    error
+		}{result, err}
+	}()
 
-	// Return success result
-	return &ConsensusResult{
-		TxHash:      hex.EncodeToString(consensusResponse.Hash),
-		BlockHeight: consensusResponse.Height,
-		Code:        consensusResponse.CheckTx.Code,
-	}, nil
+	// Wait for either the operation to complete or context to be canceled
+	select {
+	case <-ctx.Done():
+		return nil, &RepositoryError{
+			Code:    "CONSENSUS_TIMEOUT",
+			Message: "Consensus operation timed out",
+			Detail:  ctx.Err().Error(),
+		}
+	case result := <-done:
+		if result.err != nil {
+			return nil, &RepositoryError{
+				Code:    "CONSENSUS_ERROR",
+				Message: "Failed to commit to blockchain",
+				Detail:  result.err.Error(),
+			}
+		}
+
+		// Check for errors in the response
+		if result.result.CheckTx.Code != 0 {
+			return nil, &RepositoryError{
+				Code:    "CONSENSUS_ERROR",
+				Message: "Blockchain rejected transaction",
+				Detail:  fmt.Sprintf("CheckTx code: %d", result.result.CheckTx.Code),
+			}
+		}
+
+		// Return success result
+		return &ConsensusResult{
+			TxHash:      hex.EncodeToString(result.result.Hash),
+			BlockHeight: result.result.Height,
+			Code:        result.result.CheckTx.Code,
+		}, nil
+	}
 }
