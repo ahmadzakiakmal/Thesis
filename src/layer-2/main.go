@@ -29,18 +29,18 @@ import (
 )
 
 var (
-	homeDir           string
-	httpPort          string
-	postgresHost      string
-	isByzantine       bool
-	l1RpcAddressesStr string
+	homeDir             string
+	httpPort            string
+	postgresHost        string
+	isByzantine         bool
+	l1NodesAddressesStr string
 )
 
 func init() {
 	flag.StringVar(&homeDir, "cmt-home", "./node-config/simulator-node", "Path to the CometBFT config directory")
 	flag.StringVar(&httpPort, "http-port", "6000", "HTTP web server port")
 	flag.StringVar(&postgresHost, "postgres-host", "postgres-l2:5432", "DB host address")
-	flag.StringVar(&l1RpcAddressesStr, "l1-rpc-addresses", "layer1-node0:5000", "Comma-separated list of Layer-1 RPC addresses")
+	flag.StringVar(&l1NodesAddressesStr, "l1-addresses", "layer-1-node0:5000", "Comma-separated list of Layer-1 RPC addresses")
 	flag.BoolVar(&isByzantine, "byzantine", false, "Byzantine Option")
 }
 
@@ -138,7 +138,7 @@ func main() {
 
 	// Instantiate rpc client from node
 	rpcClient := cmtrpc.New(node)
-	l1RpcAddresses := strings.Split(l1RpcAddressesStr, ",")
+	l1RpcAddresses := strings.Split(l1NodesAddressesStr, ",")
 	repository.SetupRpcClient(rpcClient, l1RpcAddresses)
 
 	// Start CometBFT node

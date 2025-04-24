@@ -8,13 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository/models"
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/repository/models"
 	cmtrpc "github.com/cometbft/cometbft/rpc/client/local"
 	cmtrpctypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmttypes "github.com/cometbft/cometbft/types"
@@ -113,7 +112,6 @@ func (r *Repository) ConnectDB(dsn string) {
 			break
 		}
 		r.db = DB
-		log.Println("Connected to Postgres")
 	}
 }
 
@@ -254,9 +252,8 @@ func (r *Repository) Seed() {
 	log.Println("Database seeding completed successfully")
 }
 
-func (r *Repository) SetupRpcClient(rpcClient *cmtrpc.Local, l1Addresses []string) {
+func (r *Repository) SetupRpcClient(rpcClient *cmtrpc.Local) {
 	r.rpcClient = rpcClient
-	r.l1Addresses = l1Addresses
 }
 
 func ptrString(s string) *string {
@@ -357,7 +354,7 @@ func (r *Repository) ScanPackage(sessionID, packageID string) (*models.Package, 
 }
 
 // ValidatePackage validates the supplier's signature, links package to the session
-func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID string) (*models.Package, *RepositoryError) {
+func (r *Repository) ValidatePackage(supplierSignature, packageID, sessionID string) (*models.Package, *RepositoryError) {
 	dbTx := r.db.Begin()
 
 	var pkg models.Package
@@ -380,7 +377,7 @@ func (r *Repository) ValidatePackage(supplierSignature, packageID, SessionID str
 
 	// * For this PoC, assume all signature is valid
 	pkg.IsTrusted = true
-	pkg.SessionID = &SessionID
+	pkg.SessionID = &sessionID
 	pkg.Status = "validated"
 
 	err = dbTx.Save(&pkg).Error
@@ -529,11 +526,8 @@ func (r *Repository) QualityCheck(sessionID string, qcPassed bool, issues []stri
 }
 
 // LabelPackage adds a label to the package
-func (r *Repository) LabelPackage(sessionID, destination, priority, courierID string) (*models.Label, *RepositoryError) {
+func (r *Repository) LabelPackage(sessionID, label, destination, priority, courierID string) (*models.Label, *RepositoryError) {
 	dbTx := r.db.Begin()
-
-	log.Printf("Creating label for session: %s, destination: %s, priority: %s, courierID: %s",
-		sessionID, destination, priority, courierID)
 
 	var session models.Session
 	err := dbTx.Where("session_id = ?", sessionID).First(&session).Error
@@ -593,8 +587,9 @@ func (r *Repository) LabelPackage(sessionID, destination, priority, courierID st
 			Detail:  err.Error(),
 		}
 	}
+	log.Printf("Found courier: %s", courier.ID)
 
-	hash := sha256.Sum256([]byte(courier.ID + pkg.ID))
+	hash := sha256.Sum256([]byte(label + pkg.ID))
 	labelID := fmt.Sprintf("LBL-%s", hex.EncodeToString(hash[:])[:16])
 	log.Printf("Generated label ID: %s", labelID)
 
@@ -607,8 +602,6 @@ func (r *Repository) LabelPackage(sessionID, destination, priority, courierID st
 		Courier:     courier.Name,
 		Priority:    priority,
 	}
-
-	dbTx = dbTx.Debug()
 
 	err = dbTx.Create(&newLabel).Error
 	if err != nil {
@@ -632,7 +625,6 @@ func (r *Repository) LabelPackage(sessionID, destination, priority, courierID st
 			Detail:  err.Error(),
 		}
 	}
-	log.Printf("Label verified in transaction: %s", checkLabel.ID)
 
 	err = dbTx.Commit().Error
 	if err != nil {
@@ -757,16 +749,17 @@ func (r *Repository) CommitSession(sessionID, operatorID string) (*models.Transa
 	rawIssues = rawIssues[1 : len(rawIssues)-1]
 	issues := strings.Split(rawIssues, ",")
 
-	l1Resp, repoErr := r.CommitToL1(session.ID, session.OperatorID, pkg.ID, "signature123", label.Destination, label.Priority, label.CourierID, qcPassed, issues)
+	l1Resp, repoErr := r.CommitToL1(session.ID, session.OperatorID, pkg.ID, "signature123", qcPassed, issues)
 	if repoErr != nil {
 		dbTx.Rollback()
 		return nil, repoErr
 	}
 
 	tx := models.Transaction{
+		TxHash:      l1Resp.TxHash,
 		SessionID:   session.ID,
 		BlockHeight: l1Resp.BlockHeight,
-		Status:      "committed",
+		Status:      "confirmed",
 	}
 	session.IsCommitted = true
 	session.Status = "committed"
@@ -876,7 +869,7 @@ func (r *Repository) RunConsensus(ctx context.Context, payload ConsensusPayload)
 	}
 }
 
-func (r *Repository) CommitToL1(sessionID, operatorID, packageID, supplierSignature, destination, priority, courierID string, qcPassed bool, issues []string) (*ConsensusResult, *RepositoryError) {
+func (r *Repository) CommitToL1(sessionID, operatorID, packageID, supplierSignature string, qcPassed bool, issues []string) (*ConsensusResult, *RepositoryError) {
 	if len(r.l1Addresses) == 0 {
 		return nil, &RepositoryError{
 			Code:    "CONFIG_ERROR",
@@ -890,9 +883,6 @@ func (r *Repository) CommitToL1(sessionID, operatorID, packageID, supplierSignat
 		"operator_id":        operatorID,
 		"package_id":         packageID,
 		"supplier_signature": supplierSignature,
-		"destination":        destination,
-		"priority":           priority,
-		"courier_id":         courierID,
 		"qc_passed":          qcPassed,
 		"issues":             issues,
 		"timestamp":          time.Now(),
@@ -908,9 +898,7 @@ func (r *Repository) CommitToL1(sessionID, operatorID, packageID, supplierSignat
 		}
 	}
 
-	fmt.Println(r.l1Addresses[0])
-	url := fmt.Sprintf("http://%s/session/%s/commit-l1", r.l1Addresses[0], sessionID)
-	fmt.Println(url)
+	url := fmt.Sprintf("http:/%s/api/commit", r.l1Addresses[0])
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
 	if err != nil {
@@ -932,45 +920,186 @@ func (r *Repository) CommitToL1(sessionID, operatorID, packageID, supplierSignat
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	return &ConsensusResult{}, nil
+}
+
+func (r *Repository) ReplicateCommitFromL2(sessionID, operatorID, packageID, supplierSignature, label, destination, priority, courierID string, qcPassed bool, issues []string) *RepositoryError {
+	dbTx := r.db.Begin()
+
+	// Create Session
+	session := models.Session{
+		ID:          sessionID,
+		Status:      "active",
+		IsCommitted: false,
+		OperatorID:  operatorID,
+	}
+	err := dbTx.Create(&session).Error
 	if err != nil {
-		return nil, &RepositoryError{
-			Code:    "READ_ERROR",
-			Message: "Failed to read response from L1 node",
+		dbTx.Rollback()
+		pgErr, isPgError := err.(*pgconn.PgError)
+		if isPgError {
+			fmt.Println(pgErr.Code)
+			return &RepositoryError{
+				Code:    string(pgErr.Code),
+				Message: pgErr.Message,
+				Detail:  pgErr.Detail,
+			}
+		}
+		return &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Database error occured",
 			Detail:  err.Error(),
 		}
 	}
 
-	// Or unmarshal it to a struct if it's JSON
-	type TransactionStatus struct {
-		TxID        string    `json:"tx_id"`
-		RequestID   string    `json:"request_id"`
-		Status      string    `json:"status"`
-		BlockHeight int64     `json:"block_height"`
-		BlockHash   string    `json:"block_hash,omitempty"`
-		ConfirmTime time.Time `json:"confirm_time"`
+	// Create and Validate Package
+	var pkg models.Package
+	err = dbTx.Preload("Items").Preload("Supplier").Where("package_id = ?", packageID).First(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &RepositoryError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "Package does not exist",
+				Detail:  fmt.Sprintf("Package with id %s does not exist", packageID),
+			}
+		}
+		return &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Database error",
+			Detail:  err.Error(),
+		}
 	}
-	type ClientResponse struct {
-		StatusCode int               `json:"-"` // Not included in JSON
-		Headers    map[string]string `json:"-"` // Not included in JSON
-		// Body          string            `json:"body,omitempty"`
-		Body          interface{}       `json:"body"`
-		Meta          TransactionStatus `json:"meta"`
-		BlockchainRef string            `json:"blockchain_ref"`
-		NodeID        string            `json:"node_id"`
-	}
-	var result ClientResponse
-	if err := json.Unmarshal(bodyBytes, &result); err != nil {
-		return nil, &RepositoryError{
-			Code:    "PARSE_ERROR",
-			Message: "Failed to parse L1 node response",
+	pkg.Status = "pending_validation"
+	// * For this PoC, assume all signature is valid
+	pkg.IsTrusted = true
+	pkg.SessionID = &sessionID
+	pkg.Status = "validated"
+	err = dbTx.Save(&pkg).Error
+	if err != nil {
+		dbTx.Rollback()
+		return &RepositoryError{
+			Code:    "UPDATE_FAILED",
+			Message: "Failed to update package",
 			Detail:  err.Error(),
 		}
 	}
 
-	return &ConsensusResult{
-		BlockHeight: result.Meta.BlockHeight,
-		TxHash:      result.Meta.BlockHash,
-		Code:        0,
-	}, nil
+	// Create and assign label to package
+	var courier models.Courier
+	err = dbTx.Where("courier_id = ?", courierID).First(&courier).Error
+	if err != nil {
+		dbTx.Rollback()
+		log.Printf("Courier lookup error: %v", err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &RepositoryError{
+				Code:    "ENTITY_NOT_FOUND",
+				Message: "Courier does not exist",
+				Detail:  fmt.Sprintf("Courier with id %s does not exist", courierID),
+			}
+		}
+		return &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "A database error occurred",
+			Detail:  err.Error(),
+		}
+	}
+	log.Printf("Found courier: %s", courier.ID)
+	hash := sha256.Sum256([]byte(label + pkg.ID))
+	labelID := fmt.Sprintf("LBL-%s", hex.EncodeToString(hash[:])[:16])
+	log.Printf("Generated label ID: %s", labelID)
+	newLabel := models.Label{
+		ID:          labelID,
+		PackageID:   pkg.ID,
+		SessionID:   session.ID,
+		Destination: destination,
+		CourierID:   courier.ID,
+		Courier:     courier.Name,
+		Priority:    priority,
+	}
+	err = dbTx.Create(&newLabel).Error
+	if err != nil {
+		dbTx.Rollback()
+		log.Printf("Failed to create label: %v", err)
+		return &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to create label",
+			Detail:  err.Error(),
+		}
+	}
+	var checkLabel models.Label
+	err = dbTx.Where("label_id = ?", labelID).First(&checkLabel).Error
+	if err != nil {
+		dbTx.Rollback()
+		log.Printf("Failed to verify label creation: %v", err)
+		return &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Label created but couldn't be verified",
+			Detail:  err.Error(),
+		}
+	}
+
+	dbTx.Commit()
+
+	return nil
+}
+
+func (r *Repository) CreateTransactionRecord(txHash string, sessionID string, blockHeight int64, status string) (*models.Transaction, *RepositoryError) {
+	transactionRecord := models.Transaction{
+		TxHash:      txHash,
+		SessionID:   sessionID,
+		BlockHeight: blockHeight,
+		Status:      status,
+	}
+
+	fmt.Println("Input parameters:")
+	fmt.Println("txHash:", txHash)
+	fmt.Println("sessionID:", sessionID)
+	fmt.Println("blockHeight:", blockHeight)
+	fmt.Println("status:", status)
+	// fmt.Println("timestamp:", timestamp)
+	dbTx := r.db.Begin()
+	err := dbTx.Create(&transactionRecord).Error
+	if err != nil {
+		dbTx.Rollback()
+		return nil, &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "a database error accurred",
+			Detail:  err.Error(),
+		}
+	}
+	var session models.Session
+	err = dbTx.Model(&session).Where("session_id = ?", sessionID).Update("status", "committed").Error
+	if err != nil {
+		dbTx.Rollback()
+		return nil, &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "a database error accurred",
+			Detail:  err.Error(),
+		}
+	}
+
+	err = dbTx.Commit().Error
+	if err != nil {
+		log.Printf("Failed to commit transaction: %v", err)
+		return nil, &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "a database error accurred",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Verify record was created
+	var count int64
+	err = r.db.Model(&models.Transaction{}).Where("tx_hash = ?", txHash).Count(&count).Error
+	if err != nil || count == 0 {
+		log.Printf("Transaction verification failed after commit")
+		return nil, &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "a database error accurred",
+			Detail:  err.Error(),
+		}
+	}
+
+	return &transactionRecord, nil
 }

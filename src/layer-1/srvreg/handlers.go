@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ahmadzakiakmal/thesis/src/layer-2/repository"
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/repository"
 )
 
 var defaultHeaders = map[string]string{"Content-Type": "application/json"}
@@ -322,7 +322,7 @@ func (sr *ServiceRegistry) LabelPackageHandler(req *Request) (*Response, error) 
 		}, err
 	}
 
-	newLabel, dbErr := sr.repository.LabelPackage(sessionID, body.Destination, body.Priority, body.CourierID)
+	newLabel, dbErr := sr.repository.LabelPackage(sessionID, body.Label, body.Destination, body.Priority, body.CourierID)
 	if dbErr != nil {
 		if dbErr.Code == "ENTITY_NOT_FOUND" {
 			return &Response{
@@ -354,16 +354,7 @@ func (sr *ServiceRegistry) LabelPackageHandler(req *Request) (*Response, error) 
 }
 
 type commitSessionHandlerBody struct {
-	OperatorID        string    `json:"operator_id"`
-	PackageID         string    `json:"package_id"`
-	SupplierSignature string    `json:"supplier_signature"`
-	QcPassed          bool      `json:"qc_passed"`
-	Issues            []string  `json:"issues"`
-	Timestamp         time.Time `json:"timestamp"`
-	Label             string    `json:"label"`
-	Destination       string    `json:"destination"`
-	Priority          string    `json:"priority"`
-	CourierID         string    `json:"courier_id"`
+	OperatorID string `json:"operator_id"`
 }
 
 // CommitSessionHandler commits the session to the chain
@@ -422,6 +413,55 @@ func (sr *ServiceRegistry) CommitSessionHandler(req *Request) (*Response, error)
 	return &Response{
 		StatusCode: http.StatusAccepted,
 		Headers:    defaultHeaders,
-		Body:       fmt.Sprintf(`{"l1":%s}`, txJsonBytes),
+		Body:       fmt.Sprintf(`{"tx":%s}`, txJsonBytes),
+	}, nil
+}
+
+type receiveCommitHandlerBody struct {
+	OperatorID        string    `json:"operator_id"`
+	PackageID         string    `json:"package_id"`
+	SupplierSignature string    `json:"supplier_signature"`
+	QcPassed          bool      `json:"qc_passed"`
+	Issues            []string  `json:"issues"`
+	Timestamp         time.Time `json:"timestamp"`
+	Label             string    `json:"label"`
+	Destination       string    `json:"destination"`
+	Priority          string    `json:"priority"`
+	CourierID         string    `json:"courier_id"`
+}
+
+func (sr *ServiceRegistry) ReceiveCommitHandler(req *Request) (*Response, error) {
+	pathParts := strings.Split(req.Path, "/")
+	if len(pathParts) != 4 {
+		return &Response{
+			StatusCode: http.StatusBadRequest,
+			Headers:    defaultHeaders,
+			Body:       `{"error":"Invalid path format"}`,
+		}, fmt.Errorf("invalid path format")
+	}
+	sessionID := pathParts[2]
+
+	var body receiveCommitHandlerBody
+	err := json.Unmarshal([]byte(req.Body), &body)
+	if err != nil {
+		return &Response{
+			StatusCode: http.StatusUnprocessableEntity,
+			Headers:    defaultHeaders,
+		}, err
+	}
+
+	repoErr := sr.repository.ReplicateCommitFromL2(sessionID, body.OperatorID, body.PackageID, body.SupplierSignature, body.Label, body.Destination, body.Priority, body.CourierID, body.QcPassed, body.Issues)
+	if repoErr != nil {
+		return &Response{
+			StatusCode: http.StatusUnprocessableEntity,
+			Headers:    defaultHeaders,
+			Body:       fmt.Sprintf(`{"error":"%s, %s, %s"}`, repoErr.Code, repoErr.Message, repoErr.Detail),
+		}, err
+	}
+
+	return &Response{
+		StatusCode: http.StatusAccepted,
+		Headers:    defaultHeaders,
+		Body:       req.Body,
 	}, nil
 }

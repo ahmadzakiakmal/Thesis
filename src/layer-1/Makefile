@@ -1,13 +1,13 @@
-.PHONY: all build-bin dev-fast dev prod build-docker-image-prod build-docker-image-dev docker-clean setup
+.PHONY: all build-bin dev-fast dev prod build-docker-image-prod build-docker-image-dev docker-clean setup-dev setup-prod allow-access
 
 # Default configuration
-NODE_COUNT ?= 4
+NODE_COUNT ?= 1
 BASE_P2P_PORT ?= 9000
 BASE_RPC_PORT ?= 9001
 BASE_HTTP_PORT ?= 5000
 BASE_DIR ?= ./node-config
 
-NODES ?= 4 
+NODES ?= 1 
 REBUILD ?= true
 # Use DEV to help debugging, turns off empty block generation
 DEV ?= true 
@@ -30,7 +30,7 @@ allow-access:
 build-docker-image-prod: allow-access
 ifeq ($(REBUILD), true)
 	@echo "Building production docker image..."
-	@docker build -f Dockerfile -t dews-image:latest .
+	@docker build -f Dockerfile -t layer1-node:latest .
 else
 	@echo "Skipping production docker image build..."
 endif
@@ -39,14 +39,17 @@ endif
 build-docker-image-dev: allow-access
 ifeq ($(REBUILD), true)
 	@echo "Building development docker image..."
-	@docker build -f Dockerfile.dev -t dews-image-dev:latest .
+	@docker build -f Dockerfile.dev -t layer1-node-dev:latest .
 else
 	@echo "Skipping development docker image build..."
 endif
 
+build-docker: build-docker-image-prod build-docker-image-dev
+
 # Clean Docker environment
 docker-clean:
 	@echo "Cleaning docker environment..."
+	@docker-compose -p layer-2 down -v
 	@docker-compose -p layer-1 down -v
 	@echo "Docker environment cleaned"
 
@@ -56,6 +59,7 @@ dev-fast: docker-clean build-bin
 	@if [ -d node-config ]; then sudo rm -rf node-config; fi
 	@echo "Generating compose and config for $(NODES) nodes in dev mode"
 ifeq ($(DEV), true)
+	@echo "Empty block generation turned off"
 	@./setup-network.sh -n $(NODES) -e -m dev
 else
 	@./setup-network.sh -n $(NODES) -m dev

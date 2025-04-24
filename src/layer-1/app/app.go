@@ -11,24 +11,23 @@ import (
 	"log"
 	"sync"
 
-	"github.com/ahmadzakiakmal/thesis/src/layer-1/server/models"
-	service_registry "github.com/ahmadzakiakmal/thesis/src/layer-1/service-registry"
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/repository"
+	"github.com/ahmadzakiakmal/thesis/src/layer-1/srvreg"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"github.com/dgraph-io/badger/v4"
-	"gorm.io/gorm"
 )
 
 // Application implements the ABCI interface for the nodes
 type Application struct {
 	badgerDB        *badger.DB
-	postgresDB      *gorm.DB
 	onGoingBlock    *badger.Txn
-	serviceRegistry *service_registry.ServiceRegistry
+	serviceRegistry *srvreg.ServiceRegistry
 	nodeID          string
 	mu              sync.Mutex
 	config          *AppConfig
 	logger          cmtlog.Logger
+	repository      *repository.Repository
 }
 
 // AppConfig contains configuration for the application
@@ -39,14 +38,14 @@ type AppConfig struct {
 }
 
 // NewABCIApplication creates a new  application
-func NewABCIApplication(badgerDB *badger.DB, serviceRegistry *service_registry.ServiceRegistry, config *AppConfig, logger cmtlog.Logger, db *gorm.DB) *Application {
+func NewABCIApplication(badgerDB *badger.DB, serviceRegistry *srvreg.ServiceRegistry, config *AppConfig, logger cmtlog.Logger, repository *repository.Repository) *Application {
 	return &Application{
 		badgerDB:        badgerDB,
 		serviceRegistry: serviceRegistry,
 		nodeID:          "",
 		config:          config,
 		logger:          logger,
-		postgresDB:      db,
+		repository:      repository,
 	}
 }
 
@@ -214,92 +213,69 @@ func (app *Application) verifyTransaction(txID []byte) (*abcitypes.QueryResponse
 }
 
 // CheckTx implements the ABCI CheckTx method
-func (app *Application) CheckTx(
-	_ context.Context,
-	check *abcitypes.CheckTxRequest,
-) (*abcitypes.CheckTxResponse, error) {
-	tx := check.Tx
+func (app *Application) CheckTx(_ context.Context, check *abcitypes.CheckTxRequest) (*abcitypes.CheckTxResponse, error) {
+	txBytes := check.Tx
+	fmt.Println("[CHECKTX]:")
 
-	// Log the raw bytes in various formats
-	app.logger.Info("CheckTx raw transaction",
-		"length", len(tx),
-		// "raw_bytes", fmt.Sprintf("%v", tx),
-		"as_string", string(tx),
-		// "hex", fmt.Sprintf("%X", tx),
-	)
+	var tx srvreg.Transaction
+	err := json.Unmarshal(txBytes, &tx)
+	if err != nil {
+		return &abcitypes.CheckTxResponse{Code: 1}, fmt.Errorf("fail to parse tx on CheckTx: %s", err.Error())
+	}
+	fmt.Println("[CHECKTX_REQ]:")
+	fmt.Println(tx.Request)
 
-	// Accept any transaction for now
 	return &abcitypes.CheckTxResponse{Code: 0}, nil
 }
 
 // InitChain implements the ABCI InitChain method
-func (app *Application) InitChain(
-	_ context.Context,
-	chain *abcitypes.InitChainRequest,
-) (*abcitypes.InitChainResponse, error) {
+func (app *Application) InitChain(_ context.Context, chain *abcitypes.InitChainRequest) (*abcitypes.InitChainResponse, error) {
 	// Initialize the application state
 	return &abcitypes.InitChainResponse{}, nil
 }
 
 // PrepareProposal implements the ABCI PrepareProposal method
-func (app *Application) PrepareProposal(
-	_ context.Context,
-	proposal *abcitypes.PrepareProposalRequest,
-) (*abcitypes.PrepareProposalResponse, error) {
+func (app *Application) PrepareProposal(_ context.Context, proposal *abcitypes.PrepareProposalRequest) (*abcitypes.PrepareProposalResponse, error) {
 	// Include all transactions
 	return &abcitypes.PrepareProposalResponse{Txs: proposal.Txs}, nil
 }
 
 // ProcessProposal implements the ABCI ProcessProposal method
-func (app *Application) ProcessProposal(
-	_ context.Context,
-	proposal *abcitypes.ProcessProposalRequest,
-) (*abcitypes.ProcessProposalResponse, error) {
-	// Process the proposed block
-	for _, tx := range proposal.Txs {
-		var dewsTx service_registry.Transaction
-		if err := json.Unmarshal(tx, &dewsTx); err != nil {
-			// If we can't parse the transaction, we reject the proposal
-			return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, nil
-		}
-		isNotOrigin := dewsTx.OriginNodeID != app.nodeID
-		app.logger.Info("Process Proposal", "Tx Origin", dewsTx.OriginNodeID, "ID", app.nodeID)
-		if isNotOrigin {
-			app.logger.Info("Process Proposal", "Is the proposer?", "false")
-		} else {
-			app.logger.Info("Process Proposal", "Is the proposer?", "true")
-		}
+func (app *Application) ProcessProposal(_ context.Context, proposal *abcitypes.ProcessProposalRequest) (*abcitypes.ProcessProposalResponse, error) {
+	fmt.Println("[PROCESSPROPOSAL]:")
+	for i, txBytes := range proposal.Txs {
+		fmt.Printf("%d, TX:\n", i)
+		var tx *srvreg.Transaction
+		json.Unmarshal(txBytes, &tx)
+		fmt.Println(tx.Request)
+		fmt.Println(tx.Response)
 
-		// Check if this node is the origin or if we need to replicate
-		if isNotOrigin {
-			// This is a transaction from another node, we need to verify it
-			// by replicating the computation
-			req := dewsTx.Request
-			resp, err := req.GenerateResponse(app.serviceRegistry)
-			if err != nil {
-				log.Printf("Error generating response for request %s: %v", req.RequestID, err)
-				// We still accept the proposal, but we'll mark the transaction as failed
-				continue
-			}
-
-			// Compare our response with the one in the transaction
-			if !compareResponses(resp, &dewsTx.Response) {
-				log.Printf("Byzantine behavior detected: responses don't match for request %s", req.RequestID)
-				// In this case, we would reject the proposal in a real system
-				// For simplicity, we'll still accept it but mark it as failed
+		fmt.Println("Originator Check")
+		fmt.Println(app.nodeID)
+		fmt.Println(tx.OriginNodeID)
+		isTxOriginator := app.nodeID == tx.OriginNodeID
+		fmt.Println("Is tx originator")
+		if !isTxOriginator {
+			fmt.Println("Is not tx originator")
+			// Replicate the request and compare the response
+			handler, isHandlerFound := app.serviceRegistry.GetHandlerForPath(tx.Request.Method, tx.Request.Path)
+			if isHandlerFound {
+				response, err := handler(&tx.Request)
+				if err != nil {
+					return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, err
+				}
+				if !compareResponses(response, &tx.Response) {
+					return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT},
+						fmt.Errorf("response is different, byzantine behavior detected")
+				}
 			}
 		}
 	}
-
-	// Accept the proposal
 	return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_ACCEPT}, nil
 }
 
 // FinalizeBlock implements the ABCI FinalizeBlock method
-func (app *Application) FinalizeBlock(
-	_ context.Context,
-	req *abcitypes.FinalizeBlockRequest,
-) (*abcitypes.FinalizeBlockResponse, error) {
+func (app *Application) FinalizeBlock(_ context.Context, req *abcitypes.FinalizeBlockRequest) (*abcitypes.FinalizeBlockResponse, error) {
 	var txResults = make([]*abcitypes.ExecTxResult, len(req.Txs))
 
 	app.mu.Lock()
@@ -308,68 +284,17 @@ func (app *Application) FinalizeBlock(
 	app.onGoingBlock = app.badgerDB.NewTransaction(true)
 
 	for i, txBytes := range req.Txs {
-		var tx service_registry.Transaction
+		var tx srvreg.Transaction
 
 		if err := json.Unmarshal(txBytes, &tx); err != nil {
 			txResults[i] = &abcitypes.ExecTxResult{Code: 1, Log: "Invalid transaction format"}
 			continue
 		}
 
-		if tx.Request.Method == "" || tx.Request.Path == "" || tx.Request.RequestID == "" {
-			txResults[i] = &abcitypes.ExecTxResult{
-				Code: 2,
-				Log:  "Empty request in transaction",
-			}
-			continue
-		}
-
-		// Generate a transaction ID
 		txID := generateTxID(tx.Request.RequestID, tx.OriginNodeID)
-
-		// Check if this node is the origin
-		isOrigin := tx.OriginNodeID == app.nodeID
-
-		var result *abcitypes.ExecTxResult
-
-		if isOrigin {
-			// This is our transaction, no need to replicate
-			result = app.storeTransaction(txID, &tx, "accepted", txBytes)
-		} else {
-			// This is a transaction from another node
-			// Instead of re-executing, just verify the record exists
-
-			// Extract user email from request body for verification
-			var userData map[string]interface{}
-			err := json.Unmarshal([]byte(tx.Request.Body), &userData)
-
-			if err != nil || tx.Request.Path != "/api/customers" || tx.Request.Method != "POST" {
-				// If we can't parse the body or it's not a user creation request,
-				// fall back to accepting the transaction as is
-				result = app.storeTransaction(txID, &tx, "accepted", txBytes)
-			} else {
-				// For user creation, verify the record exists in DB
-				email, ok := userData["email"].(string)
-				if !ok || email == "" {
-					// Cannot verify, accept transaction
-					result = app.storeTransaction(txID, &tx, "accepted", txBytes)
-				} else {
-					// Check if user with this email exists
-					var count int64
-					dbErr := app.postgresDB.Model(&models.User{}).Where("email = ?", email).Count(&count).Error
-
-					if dbErr != nil || count == 0 {
-						// User doesn't exist, which is unexpected
-						app.logger.Info("User verification failed", "email", email, "error", dbErr)
-						result = app.storeTransaction(txID, &tx, "verification_failed", txBytes)
-					} else {
-						// User exists, which means the transaction was processed correctly
-						result = app.storeTransaction(txID, &tx, "accepted", txBytes)
-					}
-				}
-			}
-		}
-
-		txResults[i] = result
+		// Accept all tx that made it through to this method
+		status := "accepted"
+		txResults[i] = app.storeTransaction(txID, &tx, status, txBytes)
 	}
 
 	// Store the last block info
@@ -396,10 +321,7 @@ func (app *Application) FinalizeBlock(
 }
 
 // Commit implements the ABCI Commit method
-func (app *Application) Commit(
-	_ context.Context,
-	commit *abcitypes.CommitRequest,
-) (*abcitypes.CommitResponse, error) {
+func (app *Application) Commit(_ context.Context, commit *abcitypes.CommitRequest) (*abcitypes.CommitResponse, error) {
 	// Commit changes to the database
 	err := app.onGoingBlock.Commit()
 	if err != nil {
@@ -410,59 +332,41 @@ func (app *Application) Commit(
 }
 
 // ListSnapshots implements the ABCI ListSnapshots method
-func (app *Application) ListSnapshots(
-	_ context.Context,
-	snapshots *abcitypes.ListSnapshotsRequest,
-) (*abcitypes.ListSnapshotsResponse, error) {
+func (app *Application) ListSnapshots(_ context.Context, snapshots *abcitypes.ListSnapshotsRequest) (*abcitypes.ListSnapshotsResponse, error) {
 	return &abcitypes.ListSnapshotsResponse{}, nil
 }
 
 // OfferSnapshot implements the ABCI OfferSnapshot method
-func (app *Application) OfferSnapshot(
-	_ context.Context,
-	snapshot *abcitypes.OfferSnapshotRequest,
-) (*abcitypes.OfferSnapshotResponse, error) {
+func (app *Application) OfferSnapshot(_ context.Context, snapshot *abcitypes.OfferSnapshotRequest) (*abcitypes.OfferSnapshotResponse, error) {
 	return &abcitypes.OfferSnapshotResponse{}, nil
 }
 
 // LoadSnapshotChunk implements the ABCI LoadSnapshotChunk method
-func (app *Application) LoadSnapshotChunk(
-	_ context.Context,
-	chunk *abcitypes.LoadSnapshotChunkRequest,
-) (*abcitypes.LoadSnapshotChunkResponse, error) {
+func (app *Application) LoadSnapshotChunk(_ context.Context, chunk *abcitypes.LoadSnapshotChunkRequest) (*abcitypes.LoadSnapshotChunkResponse, error) {
 	return &abcitypes.LoadSnapshotChunkResponse{}, nil
 }
 
 // ApplySnapshotChunk implements the ABCI ApplySnapshotChunk method
-func (app *Application) ApplySnapshotChunk(
-	_ context.Context,
-	chunk *abcitypes.ApplySnapshotChunkRequest,
-) (*abcitypes.ApplySnapshotChunkResponse, error) {
+func (app *Application) ApplySnapshotChunk(_ context.Context, chunk *abcitypes.ApplySnapshotChunkRequest) (*abcitypes.ApplySnapshotChunkResponse, error) {
 	return &abcitypes.ApplySnapshotChunkResponse{
 		Result: abcitypes.APPLY_SNAPSHOT_CHUNK_RESULT_ACCEPT,
 	}, nil
 }
 
 // ExtendVote implements the ABCI ExtendVote method
-func (app *Application) ExtendVote(
-	_ context.Context,
-	extend *abcitypes.ExtendVoteRequest,
-) (*abcitypes.ExtendVoteResponse, error) {
+func (app *Application) ExtendVote(_ context.Context, extend *abcitypes.ExtendVoteRequest) (*abcitypes.ExtendVoteResponse, error) {
 	return &abcitypes.ExtendVoteResponse{}, nil
 }
 
 // VerifyVoteExtension implements the ABCI VerifyVoteExtension method
-func (app *Application) VerifyVoteExtension(
-	_ context.Context,
-	verify *abcitypes.VerifyVoteExtensionRequest,
-) (*abcitypes.VerifyVoteExtensionResponse, error) {
+func (app *Application) VerifyVoteExtension(_ context.Context, verify *abcitypes.VerifyVoteExtensionRequest) (*abcitypes.VerifyVoteExtensionResponse, error) {
 	return &abcitypes.VerifyVoteExtensionResponse{}, nil
 }
 
 // Helper Functions
 
 // storeTransaction stores the transaction in the database
-func (app *Application) storeTransaction(txID string, tx *service_registry.Transaction, status string, rawTx []byte) *abcitypes.ExecTxResult {
+func (app *Application) storeTransaction(txID string, tx *srvreg.Transaction, status string, rawTx []byte) *abcitypes.ExecTxResult {
 	// Store the transaction
 	txKey := append([]byte("tx:"), []byte(txID)...)
 	err := app.onGoingBlock.Set(txKey, rawTx)
@@ -512,7 +416,7 @@ func (app *Application) storeTransaction(txID string, tx *service_registry.Trans
 }
 
 // compareResponses compares two DeWSResponse objects for equality
-func compareResponses(a, b *service_registry.Response) bool {
+func compareResponses(a, b *srvreg.Response) bool {
 	// Compare status code
 	if a.StatusCode != b.StatusCode {
 		return false

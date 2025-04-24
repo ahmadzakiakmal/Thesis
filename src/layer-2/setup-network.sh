@@ -168,9 +168,9 @@ if [ "$NODE_COUNT" -gt 1 ]; then
             if [ $i -ne $j ]; then
                 p2p_port=$((BASE_P2P_PORT + j * 2))
                 if [ -z "$PEERS" ]; then
-                    PEERS="${NODE_IDS[$j]}@cometbft-node${j}:$p2p_port"
+                    PEERS="${NODE_IDS[$j]}@layer-2-node${j}:$p2p_port"
                 else
-                    PEERS="$PEERS,${NODE_IDS[$j]}@cometbft-node${j}:$p2p_port"
+                    PEERS="$PEERS,${NODE_IDS[$j]}@layer-2-node${j}:$p2p_port"
                 fi
             fi
         done
@@ -230,12 +230,12 @@ if [ "$NODE_COUNT" -eq 1 ]; then
       - ./build/bin:/app/bin
       - $BASE_DIR/simulator-node:/root/.cometbft
     command: >
-        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-l2:5432"
+        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=layer-2-postgres:5432 --l1-addresses=layer-1-node0:5000"
     networks:
-      - layer2-network
-  postgres-l2:
+      - bft-ws-network-l2
+  layer-2-postgres:
     image: postgres:14
-    container_name: postgres-l2
+    container_name: layer-2-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
@@ -245,7 +245,7 @@ if [ "$NODE_COUNT" -eq 1 ]; then
     ports:
       - "$postgres_port:5432"
     networks:
-      - layer2-network
+      - bft-ws-network-l2
 
 EOL
 else
@@ -257,9 +257,9 @@ else
         postgres_port=$((BASE_POSTGRES_PORT + i))
 
         cat >> "./docker-compose.dev.yml" << EOL
-  cometbft-node$i:
+  layer-2-node$i:
     image: simulator-node-dev:latest
-    container_name: cometbft-node$i
+    container_name: layer-2-node$i
     ports:
       - "$http_port:$http_port"
       - "$p2p_port:$p2p_port"
@@ -268,12 +268,12 @@ else
       - ./build/bin:/app/bin
       - $BASE_DIR/node$i:/root/.cometbft
     command: >
-        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:5432"
+        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=layer-2-postgres$i:5432"
     networks:
-      - layer2-network
-  postgres-node$i:
+      - bft-ws-network-l2
+  layer-2-postgres$i:
     image: postgres:14
-    container_name: postgres-node$i
+    container_name: layer-2-postgres$i
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
@@ -283,7 +283,7 @@ else
     ports:
       - "$postgres_port:5432"
     networks:
-      - layer2-network
+      - bft-ws-network-l2
 
 EOL
     done
@@ -291,8 +291,9 @@ fi
 
 cat >> "./docker-compose.dev.yml" << EOL
 networks:
-  layer2-network:
-    driver: bridge
+  bft-ws-network-l2:
+    name: bft-ws-network
+    external: true
 
 volumes:
 EOL
@@ -334,12 +335,12 @@ if [ "$NODE_COUNT" -eq 1 ]; then
     volumes:
       - $BASE_DIR/simulator-node:/root/.cometbft
     command: >
-        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-l2:5432"
+        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=layer-2-postgres:5432 --l1-addresses=layer-1-node0:5000"
     networks:
-      - layer2-network
-  postgres-l2:
+      - bft-ws-network-l2
+  layer-2-postgres:
     image: postgres:14
-    container_name: postgres-l2
+    container_name: layer-2-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
@@ -349,7 +350,7 @@ if [ "$NODE_COUNT" -eq 1 ]; then
     ports:
       - "$postgres_port:5432"
     networks:
-      - layer2-network
+      - bft-ws-network-l2
 
 EOL
 else
@@ -361,9 +362,9 @@ else
         postgres_port=$((BASE_POSTGRES_PORT + i))
 
         cat >> "./docker-compose.yml" << EOL
-  cometbft-node$i:
+  layer-2-node$i:
     image: simulator-node:latest
-    container_name: cometbft-node$i
+    container_name: layer-2-node$i
     ports:
       - "$http_port:$http_port"
       - "$p2p_port:$p2p_port"
@@ -371,12 +372,12 @@ else
     volumes:
       - $BASE_DIR/node$i:/root/.cometbft
     command: >
-        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:5432"
+        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=layer-2-postgres$i:5432"
     networks:
-      - layer2-network
-  postgres-node$i:
+      - bft-ws-network-l2
+  layer-2-postgres$i:
     image: postgres:14
-    container_name: postgres-node$i
+    container_name: layer-2-postgres$i
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
@@ -386,7 +387,7 @@ else
     ports:
       - "$postgres_port:5432"
     networks:
-      - layer2-network
+      - bft-ws-network-l2
 
 EOL
     done
@@ -394,8 +395,9 @@ fi
 
 cat >> "./docker-compose.yml" << EOL
 networks:
-  layer2-network:
-    driver: bridge
+  bft-ws-network-l2:
+    name: bft-ws-network
+    external: true
 
 volumes:
 EOL
@@ -479,13 +481,13 @@ echo ""
 if [ "$NODE_COUNT" -eq 1 ]; then
     # Single node startup instructions
     http_port=$BASE_HTTP_PORT
-    echo "Simulator Node: ./build/bin --cmt-home=$BASE_DIR/simulator-node --http-port $http_port --postgres-host=postgres-l2:5432"
+    echo "Simulator Node: ./build/bin --cmt-home=$BASE_DIR/simulator-node --http-port $http_port --postgres-host=layer-2-postgres:5432 --l1-addresses=layer-1-node0:5000"
 else
     # Multi-node startup instructions
     for i in $(seq 0 $((NODE_COUNT - 1))); do
         http_port=$((BASE_HTTP_PORT + i))
         postgres_port=$((BASE_POSTGRES_PORT + i))
-        echo "Node $i: ./build/bin --cmt-home=$BASE_DIR/node$i --http-port $http_port --postgres-host=postgres-node$i:$postgres_port"
+        echo "Node $i: ./build/bin --cmt-home=$BASE_DIR/node$i --http-port $http_port --postgres-host=layer-2-postgres$i:$postgres_port"
     done
 fi
 

@@ -7,7 +7,7 @@ BASE_RPC_PORT=9000
 BASE_HTTP_PORT=5000
 BASE_DIR="./node-config"
 DISABLE_EMPTY_BLOCKS=false
-BASE_POSTGRES_PORT=5432
+BASE_POSTGRES_PORT=5440
 MODE="prod"  # Default to production mode
 
 # Parse command line options
@@ -130,9 +130,9 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
         if [ $i -ne $j ]; then
             p2p_port=$((BASE_P2P_PORT + j * 2))
             if [ -z "$PEERS" ]; then
-                PEERS="${NODE_IDS[$j]}@cometbft-node${j}:$p2p_port"
+                PEERS="${NODE_IDS[$j]}@layer-1-node${j}:$p2p_port"
             else
-                PEERS="$PEERS,${NODE_IDS[$j]}@cometbft-node${j}:$p2p_port"
+                PEERS="$PEERS,${NODE_IDS[$j]}@layer-1-node${j}:$p2p_port"
             fi
         fi
     done
@@ -167,9 +167,9 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     postgres_port=$((BASE_POSTGRES_PORT + i))
 
     cat >> "./docker-compose.dev.yml" << EOL
-  cometbft-node$i:
-    image: dews-image-dev:latest
-    container_name: cometbft-node$i
+  layer-1-node$i:
+    image: layer1-node-dev:latest
+    container_name: layer-1-node$i
     ports:
       - "$http_port:$http_port"
       - "$p2p_port:$p2p_port"
@@ -178,12 +178,12 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
       - ./build/bin:/app/bin
       - $BASE_DIR/node$i:/root/.cometbft
     command: >
-        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:5432"
+        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=layer-1-postgres$i:5432"
     networks:
-      - dews-network
-  postgres-node$i:
+      - bft-ws-network
+  layer-1-postgres$i:
     image: postgres:14
-    container_name: postgres-node$i
+    container_name: layer-1-postgres$i
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
@@ -193,15 +193,17 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     ports:
       - "$postgres_port:5432"
     networks:
-      - dews-network
+      - bft-ws-network
 
 EOL
 done
 
 cat >> "./docker-compose.dev.yml" << EOL
 networks:
-  dews-network:
+  bft-ws-network:
+    name: bft-ws-network
     driver: bridge
+    external: false
 
 volumes:
 EOL
@@ -224,9 +226,9 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     postgres_port=$((BASE_POSTGRES_PORT + i))
 
     cat >> "./docker-compose.yml" << EOL
-  cometbft-node$i:
-    image: dews-image:latest
-    container_name: cometbft-node$i
+  layer-1-node$i:
+    image: layer1-node:latest
+    container_name: layer-1-node$i
     ports:
       - "$http_port:$http_port"
       - "$p2p_port:$p2p_port"
@@ -234,12 +236,12 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     volumes:
       - $BASE_DIR/node$i:/root/.cometbft
     command: >
-        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=postgres-node$i:5432"
+        sh -c "/app/bin --cmt-home=/root/.cometbft --http-port $http_port --postgres-host=layer-1-postgres$i:5432"
     networks:
-      - dews-network
-  postgres-node$i:
+      - bft-ws-network
+  layer-1-postgres$i:
     image: postgres:14
-    container_name: postgres-node$i
+    container_name: layer-1-postgres$i
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
@@ -249,15 +251,17 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     ports:
       - "$postgres_port:5432"
     networks:
-      - dews-network
+      - bft-ws-network
 
 EOL
 done
 
 cat >> "./docker-compose.yml" << EOL
 networks:
-  dews-network:
+  bft-ws-network:
+    name: bft-ws-network
     driver: bridge
+    external: false
 
 volumes:
 EOL
@@ -270,8 +274,8 @@ done
 
 echo "docker-compose files created with $NODE_COUNT nodes"
 echo "Note: You need to build the appropriate Docker image first:"
-echo "For dev mode: docker build -f Dockerfile.dev -t dews-image-dev:latest ."
-echo "For prod mode: docker build -f Dockerfile -t dews-image:latest ."
+echo "For dev mode: docker build -f Dockerfile.dev -t layer1-node-dev:latest ."
+echo "For prod mode: docker build -f Dockerfile -t layer1-node:latest ."
 
 # Fix permissions for Docker access
 echo "Setting appropriate permissions for Docker..."
@@ -312,7 +316,7 @@ echo ""
 for i in $(seq 0 $((NODE_COUNT - 1))); do
     http_port=$((BASE_HTTP_PORT + i))
     postgres_port=$((BASE_POSTGRES_PORT + 1))
-    echo "Node $i: ./build/bin --cmt-home=$BASE_DIR/node$i --http-port $http_port --postgres-host=postgres-node$i:$postgres_port"
+    echo "Node $i: ./build/bin --cmt-home=$BASE_DIR/node$i --http-port $http_port --postgres-host=layer-1-postgres$i:$postgres_port"
 done
 
 echo ""
