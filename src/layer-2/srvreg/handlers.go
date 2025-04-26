@@ -69,24 +69,9 @@ func (sr *ServiceRegistry) CreateSessionHandler(req *Request) (*Response, error)
 	}, nil
 }
 
-type scanPackageHandlerBody struct {
-	PackageID string `json:"package_id"`
-}
-
 func (sr *ServiceRegistry) ScanPackageHandler(req *Request) (*Response, error) {
-	var body scanPackageHandlerBody
-	err := json.Unmarshal([]byte(req.Body), &body)
-	if err != nil {
-		sr.logger.Info("Failed to parse body", "error", err.Error())
-		return &Response{
-			StatusCode: http.StatusUnprocessableEntity,
-			Headers:    defaultHeaders,
-			Body:       fmt.Sprintf(`{"error":"Invalid body format: %s"}`, err.Error()),
-		}, fmt.Errorf("invalid body format")
-	}
-
 	pathParts := strings.Split(req.Path, "/")
-	if len(pathParts) != 4 {
+	if len(pathParts) != 5 {
 		return &Response{
 			StatusCode: http.StatusBadRequest,
 			Headers:    defaultHeaders,
@@ -94,12 +79,9 @@ func (sr *ServiceRegistry) ScanPackageHandler(req *Request) (*Response, error) {
 		}, fmt.Errorf("invalid path format")
 	}
 	sessionID := pathParts[2]
+	packageID := pathParts[4]
 
-	if body.PackageID == "" {
-		return nil, fmt.Errorf("package_id is required")
-	}
-
-	pkg, dbErr := sr.repository.ScanPackage(sessionID, body.PackageID)
+	pkg, dbErr := sr.repository.ScanPackage(sessionID, packageID)
 	if dbErr != nil {
 		switch dbErr.Code {
 		case "ENTITY_NOT_FOUND":
@@ -423,5 +405,21 @@ func (sr *ServiceRegistry) CommitSessionHandler(req *Request) (*Response, error)
 		StatusCode: http.StatusAccepted,
 		Headers:    defaultHeaders,
 		Body:       fmt.Sprintf(`{"l1":%s}`, txJsonBytes),
+	}, nil
+}
+
+func (sr *ServiceRegistry) CreateTestPackage(req *Request) (*Response, error) {
+	pkgID, repoErr := sr.repository.CreateTestPackage(req.RequestID)
+	if repoErr != nil {
+		return &Response{
+			StatusCode: http.StatusInternalServerError,
+			Headers:    defaultHeaders,
+			Body:       fmt.Sprintf(`{"error":"%s"}`, repoErr.Detail),
+		}, fmt.Errorf("database error: %v", repoErr)
+	}
+	return &Response{
+		StatusCode: http.StatusAccepted,
+		Headers:    defaultHeaders,
+		Body:       fmt.Sprintf(`{"package_id":"%s"}`, pkgID),
 	}, nil
 }

@@ -594,7 +594,7 @@ func (r *Repository) LabelPackage(sessionID, destination, priority, courierID st
 		}
 	}
 
-	hash := sha256.Sum256([]byte(courier.ID + pkg.ID))
+	hash := sha256.Sum256([]byte(courier.ID + pkg.ID + sessionID))
 	labelID := fmt.Sprintf("LBL-%s", hex.EncodeToString(hash[:])[:16])
 	log.Printf("Generated label ID: %s", labelID)
 
@@ -973,4 +973,67 @@ func (r *Repository) CommitToL1(sessionID, operatorID, packageID, supplierSignat
 		TxHash:      result.Meta.BlockHash,
 		Code:        0,
 	}, nil
+}
+
+// CreateTestPackage is used to create packages (for testing only)
+func (r *Repository) CreateTestPackage(requestID string) (string, *RepositoryError) {
+	supplierID := "SUP-001"
+	pkgID := fmt.Sprintf("PKG-%s", requestID[:8])
+
+	// Begin transaction
+	tx := r.db.Begin()
+	if tx.Error != nil {
+		return "", &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to start transaction",
+			Detail:  tx.Error.Error(),
+		}
+	}
+
+	// Create package
+	pkg := models.Package{
+		ID:             pkgID,
+		SupplierID:     supplierID,
+		DeliveryNoteID: "DN-001",
+		Signature:      "any",
+		IsTrusted:      false,
+	}
+
+	if err := tx.Create(&pkg).Error; err != nil {
+		tx.Rollback()
+		return "", &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "a database error occurred",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Add a single item to the package (minimum requirement)
+	item := models.Item{
+		ID:          fmt.Sprintf("ITEM-%s", requestID[len(requestID)-6:]),
+		PackageID:   pkgID,
+		Quantity:    1,
+		Description: "Test Item",
+		CatalogID:   ptrString("CAT-001"), // Assuming CAT-001 exists from seed
+	}
+
+	if err := tx.Create(&item).Error; err != nil {
+		tx.Rollback()
+		return "", &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to create item",
+			Detail:  err.Error(),
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit().Error; err != nil {
+		return "", &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to commit transaction",
+			Detail:  err.Error(),
+		}
+	}
+
+	return pkg.ID, nil
 }

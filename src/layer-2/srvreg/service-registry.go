@@ -224,7 +224,7 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 	// Create Session Endpoint
 	sr.RegisterHandler("POST", "/session/start", true, sr.CreateSessionHandler)
 	// Scan Package Ednpoint
-	sr.RegisterHandler("GET", "/session/:id/scan", false, sr.ScanPackageHandler)
+	sr.RegisterHandler("GET", "/session/:id/scan/:packageID", false, sr.ScanPackageHandler)
 	// Validate Package Endpoint
 	sr.RegisterHandler("POST", "/session/:id/validate", false, sr.ValidatePackageHandler)
 	// Quality Check Endpoint
@@ -233,6 +233,9 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 	sr.RegisterHandler("POST", "/session/:id/label", false, sr.LabelPackageHandler)
 	// Commit Session Endpoint
 	sr.RegisterHandler("POST", "/session/:id/commit", false, sr.CommitSessionHandler)
+
+	// Test Create Package Endpoint
+	sr.RegisterHandler("POST", "/session/test-package", true, sr.CreateTestPackage)
 }
 
 // GenerateResponse executes the request and generates a response

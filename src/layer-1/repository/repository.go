@@ -925,20 +925,25 @@ func (r *Repository) CommitToL1(sessionID, operatorID, packageID, supplierSignat
 
 func (r *Repository) ReplicateCommitFromL2(sessionID, operatorID, packageID, supplierSignature, label, destination, priority, courierID string, qcPassed bool, issues []string) *RepositoryError {
 	dbTx := r.db.Begin()
+	if dbTx.Error != nil {
+		return &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to start transaction",
+			Detail:  dbTx.Error.Error(),
+		}
+	}
 
-	// Create Session
+	// 1. Create Session
 	session := models.Session{
 		ID:          sessionID,
 		Status:      "active",
-		IsCommitted: false,
+		IsCommitted: true, // Set to true since this is a replicated commit
 		OperatorID:  operatorID,
 	}
-	err := dbTx.Create(&session).Error
-	if err != nil {
+	if err := dbTx.Create(&session).Error; err != nil {
 		dbTx.Rollback()
 		pgErr, isPgError := err.(*pgconn.PgError)
 		if isPgError {
-			fmt.Println(pgErr.Code)
 			return &RepositoryError{
 				Code:    string(pgErr.Code),
 				Message: pgErr.Message,
@@ -947,50 +952,95 @@ func (r *Repository) ReplicateCommitFromL2(sessionID, operatorID, packageID, sup
 		}
 		return &RepositoryError{
 			Code:    "DATABASE_ERROR",
-			Message: "Database error occured",
+			Message: "Failed to create session",
 			Detail:  err.Error(),
 		}
 	}
 
-	// Create and Validate Package
-	var pkg models.Package
-	err = dbTx.Preload("Items").Preload("Supplier").Where("package_id = ?", packageID).First(&pkg).Error
-	if err != nil {
+	// 2. Create Package (with all required data in one step)
+	pkgStatus := "qc_failed"
+	if qcPassed {
+		pkgStatus = "qc_passed"
+	}
+	pkg := models.Package{
+		ID:             packageID,
+		SupplierID:     "SUP-001",
+		DeliveryNoteID: "DN-001",
+		Signature:      supplierSignature,
+		IsTrusted:      true,
+		Status:         pkgStatus,
+		SessionID:      &sessionID,
+	}
+
+	if err := dbTx.Create(&pkg).Error; err != nil {
 		dbTx.Rollback()
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &RepositoryError{
-				Code:    "ENTITY_NOT_FOUND",
-				Message: "Package does not exist",
-				Detail:  fmt.Sprintf("Package with id %s does not exist", packageID),
-			}
-		}
 		return &RepositoryError{
 			Code:    "DATABASE_ERROR",
-			Message: "Database error",
-			Detail:  err.Error(),
-		}
-	}
-	pkg.Status = "pending_validation"
-	// * For this PoC, assume all signature is valid
-	pkg.IsTrusted = true
-	pkg.SessionID = &sessionID
-	pkg.Status = "validated"
-	err = dbTx.Save(&pkg).Error
-	if err != nil {
-		dbTx.Rollback()
-		return &RepositoryError{
-			Code:    "UPDATE_FAILED",
-			Message: "Failed to update package",
+			Message: "Failed to create package",
 			Detail:  err.Error(),
 		}
 	}
 
-	// Create and assign label to package
-	var courier models.Courier
-	err = dbTx.Where("courier_id = ?", courierID).First(&courier).Error
-	if err != nil {
+	// 3. Add an item to the package
+	item := models.Item{
+		ID:          fmt.Sprintf("ITEM-%s", sessionID[len(sessionID)-6:]),
+		PackageID:   packageID,
+		Quantity:    1,
+		Description: "Test Item",
+		CatalogID:   ptrString("CAT-001"),
+	}
+
+	if err := dbTx.Create(&item).Error; err != nil {
 		dbTx.Rollback()
-		log.Printf("Courier lookup error: %v", err)
+		return &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to create item",
+			Detail:  err.Error(),
+		}
+	}
+
+	// 4. Create QC Record
+	// Convert issues slice to string for storage
+	issuesStr := ""
+	if len(issues) > 0 {
+		issuesBytes, err := json.Marshal(issues)
+		if err != nil {
+			dbTx.Rollback()
+			return &RepositoryError{
+				Code:    "MARSHALING_ERROR",
+				Message: "Failed to process issues data",
+				Detail:  err.Error(),
+			}
+		}
+		issuesStr = string(issuesBytes)
+	}
+
+	// Generate QC record ID
+	hash := sha256.Sum256([]byte(packageID + sessionID))
+	qcID := fmt.Sprintf("QC-%s", hex.EncodeToString(hash[:])[:16])
+
+	qcRecord := models.QCRecord{
+		ID:          qcID,
+		PackageID:   packageID,
+		SessionID:   sessionID,
+		Passed:      qcPassed,
+		InspectorID: operatorID,
+		Issues:      issuesStr,
+	}
+
+	if err := dbTx.Create(&qcRecord).Error; err != nil {
+		dbTx.Rollback()
+		return &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to create QC record",
+			Detail:  err.Error(),
+		}
+	}
+
+	// 5. Create and assign label to package
+	var courier models.Courier
+	if err := dbTx.Where("courier_id = ?", courierID).First(&courier).Error; err != nil {
+		dbTx.Rollback()
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &RepositoryError{
 				Code:    "ENTITY_NOT_FOUND",
@@ -1000,46 +1050,52 @@ func (r *Repository) ReplicateCommitFromL2(sessionID, operatorID, packageID, sup
 		}
 		return &RepositoryError{
 			Code:    "DATABASE_ERROR",
-			Message: "A database error occurred",
+			Message: "Failed to find courier",
 			Detail:  err.Error(),
 		}
 	}
-	log.Printf("Found courier: %s", courier.ID)
-	hash := sha256.Sum256([]byte(label + pkg.ID))
-	labelID := fmt.Sprintf("LBL-%s", hex.EncodeToString(hash[:])[:16])
-	log.Printf("Generated label ID: %s", labelID)
+
+	labelHash := sha256.Sum256([]byte(label + packageID + sessionID))
+	labelID := fmt.Sprintf("LBL-%s", hex.EncodeToString(labelHash[:])[:16])
+
 	newLabel := models.Label{
 		ID:          labelID,
-		PackageID:   pkg.ID,
-		SessionID:   session.ID,
+		PackageID:   packageID,
+		SessionID:   sessionID,
 		Destination: destination,
 		CourierID:   courier.ID,
 		Courier:     courier.Name,
 		Priority:    priority,
 	}
-	err = dbTx.Create(&newLabel).Error
-	if err != nil {
+
+	if err := dbTx.Create(&newLabel).Error; err != nil {
 		dbTx.Rollback()
-		log.Printf("Failed to create label: %v", err)
 		return &RepositoryError{
 			Code:    "DATABASE_ERROR",
 			Message: "Failed to create label",
 			Detail:  err.Error(),
 		}
 	}
-	var checkLabel models.Label
-	err = dbTx.Where("label_id = ?", labelID).First(&checkLabel).Error
-	if err != nil {
+
+	// 6. Update session status to committed
+	session.Status = "committed"
+	if err := dbTx.Save(&session).Error; err != nil {
 		dbTx.Rollback()
-		log.Printf("Failed to verify label creation: %v", err)
 		return &RepositoryError{
 			Code:    "DATABASE_ERROR",
-			Message: "Label created but couldn't be verified",
+			Message: "Failed to update session status",
 			Detail:  err.Error(),
 		}
 	}
 
-	dbTx.Commit()
+	// 7. Commit the transaction
+	if err := dbTx.Commit().Error; err != nil {
+		return &RepositoryError{
+			Code:    "DATABASE_ERROR",
+			Message: "Failed to commit transaction",
+			Detail:  err.Error(),
+		}
+	}
 
 	return nil
 }

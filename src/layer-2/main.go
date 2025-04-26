@@ -38,7 +38,7 @@ var (
 
 func init() {
 	flag.StringVar(&homeDir, "cmt-home", "./node-config/simulator-node", "Path to the CometBFT config directory")
-	flag.StringVar(&httpPort, "http-port", "6000", "HTTP web server port")
+	flag.StringVar(&httpPort, "http-port", "4000", "HTTP web server port")
 	flag.StringVar(&postgresHost, "postgres-host", "postgres-l2:5432", "DB host address")
 	flag.StringVar(&l1NodesAddressesStr, "l1-addresses", "layer-1-node0:5000", "Comma-separated list of Layer-1 RPC addresses")
 	flag.BoolVar(&isByzantine, "byzantine", false, "Byzantine Option")
