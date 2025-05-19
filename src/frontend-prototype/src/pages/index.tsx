@@ -47,6 +47,9 @@ export default function DashboardPage() {
           </TabsContent>
         </Tabs>
       </main>
+      <footer className="py-10 flex justify-center items-center text-sm">
+        Prototype | Ahmad Zaki Akmal | &copy; 2025
+      </footer>
     </div>
   )
 }
