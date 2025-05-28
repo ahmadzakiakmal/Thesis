@@ -1,4 +1,4 @@
-#!/bin/bash
+\#!/bin/bash
 
 # Configuration variables
 export L1_NODES=4

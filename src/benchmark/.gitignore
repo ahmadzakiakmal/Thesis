@@ -1,2 +1,7 @@
 benchmark_*
 chart_*
+*.csv
+*.png
+*.pdf
+benchmark
+test-*

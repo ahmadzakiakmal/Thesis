@@ -232,7 +232,7 @@ func (sr *ServiceRegistry) RegisterDefaultServices() {
 	// Label Package Endpoint
 	sr.RegisterHandler("POST", "/session/:id/label", false, sr.LabelPackageHandler)
 	// Commit Session Endpoint
-	sr.RegisterHandler("POST", "/session/:id/commit", false, sr.CommitSessionHandler)
+	sr.RegisterHandler("POST", "/commit/:id", false, sr.CommitSessionHandler)
 
 	// Test Create Package Endpoint
 	sr.RegisterHandler("POST", "/session/test-package", true, sr.CreateTestPackage)

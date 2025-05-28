@@ -113,6 +113,14 @@ func (r *Repository) ConnectDB(dsn string) {
 		}
 		r.db = DB
 	}
+
+	if r.db != nil {
+		r.Migrate()
+		r.Seed()
+		log.Println("Connected to DB")
+	} else {
+		log.Println("Failed to connect to DB")
+	}
 }
 
 func (r *Repository) Migrate() {

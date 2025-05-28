@@ -126,6 +126,7 @@ func NewWebServer(app *app.Application, httpPort string, logger cmtlog.Logger, n
 	mux.HandleFunc("/status/", server.handleTransactionStatus)
 	// Session Endpoints
 	mux.HandleFunc("/session/", server.handleSessionAPI)
+	mux.HandleFunc("/commit/", server.handleCommitAPI)
 
 	return server, nil
 }
@@ -358,6 +359,82 @@ func (ws *WebServer) handleSessionAPI(w http.ResponseWriter, r *http.Request) {
 				BlockTransactionsB64: blockTransactionsB64,
 			},
 		},
+		NodeID: transaction.OriginNodeID,
+	}
+
+	for key, value := range response.Headers {
+		w.Header().Set(key, value)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	err = encoder.Encode(apiResponse)
+	if err != nil {
+		ws.logger.Error("Failed to encode client response", "err", err)
+	}
+
+	ws.logger.Info("=== Req-Res Pair Result ===",
+		transaction.Request.Path,
+		transaction.Request.Method,
+		transaction.Request.Body,
+		transaction.Response.StatusCode,
+		transaction.Response.Body,
+	)
+}
+
+func (ws *WebServer) handleCommitAPI(w http.ResponseWriter, r *http.Request) {
+	requestID, err := generateRequestID()
+	if err != nil {
+		JSONError(w, "Internal Server Error", http.StatusInternalServerError)
+		ws.logger.Error("Failed to generate request ID", "err", err)
+		return
+	}
+
+	request, err := service_registry.ConvertHttpRequestToConsensusRequest(r, requestID)
+	if err != nil {
+		JSONError(w, "Failed to convert request: "+err.Error(), http.StatusUnprocessableEntity)
+		ws.logger.Error("Failed to convert HTTP request", "err", err)
+		return
+	}
+	// request.Body = strings.TrimSpace(request.Body)
+
+	response, err := request.GenerateResponse(ws.serviceRegistry)
+	if err != nil {
+		JSONError(w, "Failed to generate response: "+err.Error(), http.StatusUnprocessableEntity)
+		ws.logger.Error("Failed to generate response", "err", err)
+		return
+	}
+
+	transaction := &service_registry.Transaction{
+		Request:      *request,
+		Response:     *response,
+		OriginNodeID: string(ws.node.ConsensusReactor().Switch.NodeInfo().ID()),
+	}
+
+	// Respond to client
+	apiResponse := ClientResponse{
+		StatusCode: response.StatusCode,
+		Headers:    response.Headers,
+		Body:       response.ParseBody(),
+		// Meta: TransactionStatus{
+		// 	TxID:        consensusResponse.TxHash,
+		// 	RequestID:   requestID,
+		// 	Status:      "confirmed",
+		// 	BlockHeight: blockHeight,
+		// 	// BlockHash:   hex.EncodeToString(consensusResponse.Hash),
+		// 	ConfirmTime: time.Now(),
+		// 	ResponseInfo: ResponseInfo{
+		// 		StatusCode:  response.StatusCode,
+		// 		ContentType: response.Headers["Content-Type"],
+		// 		BodyLength:  len(response.Body),
+		// 	},
+		// 	BlockTxs: BlockTxsDetail{
+		// 		BlockTransactions:    blockTransactions,
+		// 		BlockTransactionsB64: blockTransactionsB64,
+		// 	},
+		// },
 		NodeID: transaction.OriginNodeID,
 	}
 

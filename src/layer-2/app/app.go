@@ -257,15 +257,23 @@ func (app *Application) ProcessProposal(_ context.Context, proposal *abcitypes.P
 			if isHandlerFound {
 				response, err := handler(&tx.Request)
 				if err != nil {
+					fmt.Println("Voted invalid", err)
 					return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, err
 				}
 				if !compareResponses(response, &tx.Response) {
+					fmt.Println("Voted invalid")
+					fmt.Println("Different responses, byzantine behavior detected")
 					return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT},
 						fmt.Errorf("response is different, byzantine behavior detected")
 				}
+			} else {
+				fmt.Println("Voted invalid", "Handler not found")
+				return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT},
+					fmt.Errorf("handler not found, byzantine behavior detected")
 			}
 		}
 	}
+	fmt.Println("Voted valid")
 	return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_ACCEPT}, nil
 }
 

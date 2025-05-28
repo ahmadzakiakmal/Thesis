@@ -203,6 +203,28 @@ else
     done
 fi
 
+if [ $NODE_COUNT -lt 4 ]; then
+    for i in $(seq 0 $((NODE_COUNT - 1))); do
+        # Faster consensus for dev mode with few nodes
+        sed -i.bak 's/^timeout_propose = "3s"/timeout_propose = "800ms"/' "$BASE_DIR/node$i/config/config.toml"
+        sed -i.bak 's/^timeout_propose_delta = "500ms"/timeout_propose_delta = "200ms"/' "$BASE_DIR/node$i/config/config.toml"
+        sed -i.bak 's/^timeout_vote = "1s"/timeout_vote = "400ms"/' "$BASE_DIR/node$i/config/config.toml"
+        sed -i.bak 's/^timeout_vote_delta = "500ms"/timeout_vote_delta = "200ms"/' "$BASE_DIR/node$i/config/config.toml"
+        sed -i.bak 's/^peer_gossip_sleep_duration = "100ms"/peer_gossip_sleep_duration = "50ms"/' "$BASE_DIR/node$i/config/config.toml"
+        sed -i.bak 's/^peer_query_maj23_sleep_duration = "2s"/peer_query_maj23_sleep_duration = "500ms"/' "$BASE_DIR/node$i/config/config.toml"
+        echo "Node $i configured with faster consensus timeouts for development"
+    done
+fi
+
+if [ $NODE_COUNT -eq 2 ]; then
+    for i in $(seq 0 $((NODE_COUNT - 1))); do
+        # Ultra-fast settings for 2-node development
+        sed -i.bak 's/^timeout_propose = "3s"/timeout_propose = "1s"/' "$BASE_DIR/node$i/config/config.toml"
+        sed -i.bak 's/^timeout_vote = "1s"/timeout_vote = "800ms"/' "$BASE_DIR/node$i/config/config.toml"
+        echo "Node $i configured with ultra-fast timeouts for 2-node development"
+    done
+fi
+
 # Create docker-compose files for both development and production
 echo "Clearing and creating new docker-compose files..."
 

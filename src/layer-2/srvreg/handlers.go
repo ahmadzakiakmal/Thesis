@@ -351,7 +351,7 @@ type commitSessionHandlerBody struct {
 // CommitSessionHandler commits the session to the chain
 func (sr *ServiceRegistry) CommitSessionHandler(req *Request) (*Response, error) {
 	pathParts := strings.Split(req.Path, "/")
-	if len(pathParts) != 4 {
+	if len(pathParts) != 3 {
 		return &Response{
 			StatusCode: http.StatusBadRequest,
 			Headers:    defaultHeaders,

@@ -37,7 +37,7 @@ var (
 func init() {
 	flag.StringVar(&homeDir, "cmt-home", "./node-config/simulator-node", "Path to the CometBFT config directory")
 	flag.StringVar(&httpPort, "http-port", "5000", "HTTP web server port")
-	flag.StringVar(&postgresHost, "postgres-host", "postgres-l2:5432", "DB host address")
+	flag.StringVar(&postgresHost, "postgres-host", "l1-postgres0:5432", "DB host address")
 	flag.BoolVar(&isByzantine, "byzantine", false, "Byzantine Option")
 }
 
@@ -66,10 +66,8 @@ func main() {
 	// Instantiate Rpc Client
 	// rpcClient := cmtrpc.New(node)
 	repository := repository.NewRepository()
-	repository.ConnectDB(dsn)
-	repository.Migrate()
-	repository.Seed()
 	log.Printf("Connecting to: %s\n", dsn)
+	repository.ConnectDB(dsn)
 
 	// Initialize Badger DB
 	badgerPath := filepath.Join(homeDir, "badger")
