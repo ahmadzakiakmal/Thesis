@@ -266,7 +266,10 @@ func ptrString(s string) *string {
 // DB Operations
 
 // CreateSession creates a new session in the Database
-func (r *Repository) CreateSession(sessionID, operatorID string) (*models.Session, *RepositoryError) {
+func (r *Repository) CreateSession(
+	sessionID,
+	operatorID string,
+) (*models.Session, *RepositoryError) {
 	session := models.Session{
 		ID:          sessionID,
 		Status:      "active",
@@ -976,7 +979,9 @@ func (r *Repository) CommitToL1(sessionID, operatorID, packageID, supplierSignat
 }
 
 // CreateTestPackage is used to create packages (for testing only)
-func (r *Repository) CreateTestPackage(requestID string) (string, *RepositoryError) {
+func (r *Repository) CreateTestPackage(
+	requestID string,
+) (string, *RepositoryError) {
 	supplierID := "SUP-001"
 	pkgID := fmt.Sprintf("PKG-%s", requestID[:8])
 

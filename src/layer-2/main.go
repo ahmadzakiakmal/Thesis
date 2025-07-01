@@ -88,17 +88,26 @@ func main() {
 
 	// Create ABCI Application
 	appConfig := &app.AppConfig{
-		NodeID:        filepath.Base(homeDir), // Use directory name as node ID
-		RequiredVotes: 1,
-		LogAllTxs:     true,
+		NodeID:    filepath.Base(homeDir),
+		LogAllTxs: true,
 	}
 	logger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
 
 	// Initialize Service Registry
-	serviceRegistry := service_registry.NewServiceRegistry(repository, logger, false)
+	serviceRegistry := service_registry.NewServiceRegistry(
+		repository,
+		logger,
+		false,
+	)
 	serviceRegistry.RegisterDefaultServices()
 
-	app := app.NewABCIApplication(db, serviceRegistry, appConfig, logger, repository)
+	app := app.NewABCIApplication(
+		db,
+		serviceRegistry,
+		appConfig,
+		logger,
+		repository,
+	)
 
 	// Private Validator
 	pv := privval.LoadFilePV(
@@ -149,7 +158,14 @@ func main() {
 	}()
 
 	// Start Web Server
-	webserver, err := server.NewWebServer(app, httpPort, logger, node, serviceRegistry, repository)
+	webserver, err := server.NewWebServer(
+		app,
+		httpPort,
+		logger,
+		node,
+		serviceRegistry,
+		repository,
+	)
 	if err != nil {
 		log.Fatalf("Creating web server: %v", err)
 	}

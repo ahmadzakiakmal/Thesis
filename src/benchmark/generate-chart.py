@@ -77,11 +77,17 @@ plt.ylabel('Latency (ms)', rotation=90, labelpad=10)
 
 # Set appropriate y-axis ticks
 max_latency = df['Latency_ms'].max()
-y_max = int(np.ceil(max_latency / 50) * 50)  # Round up to nearest 50
-step_size = y_max // 5  # Divide range into 5 steps (adjust as needed)
+y_max = int(500)  # Round up to nearest 50
+step_size = 100  # Divide range into 5 steps (adjust as needed)
+
+plt.ylim(0, y_max)
+plt.yticks(np.arange(0, y_max + step_size, step_size))
+# set y axis fontsize
+plt.tick_params(axis='y', labelsize=10)
+plt.xticks(fontsize=10)
 
 # Remove automatic titles
-plt.title(f"API Endpoint Latency ({l1_nodes} L1, {l2_nodes} L2 Nodes)", fontsize=10)
+plt.title(f"", fontsize=10)
 plt.suptitle('')  # Remove the automatic title
 
 # Adjust layout to match IEEE style
@@ -91,7 +97,7 @@ plt.subplots_adjust(left=0.155, bottom=0.25, right=0.98, top=0.92)
 plt.xticks(rotation=30, ha='right')
 
 # Save figure with IEEE-compatible format
-# plt.savefig(f"chart_n_{n}_l1_{l1_nodes}_l2_{l2_nodes}.pdf", format='pdf', dpi=1000)
+plt.savefig(f"chart_n_{n}_l1_{l1_nodes}_l2_{l2_nodes}.pdf", format='pdf', dpi=1000)
 plt.savefig(f"chart_n_{n}_l1_{l1_nodes}_l2_{l2_nodes}.png", format='png', dpi=300)
 
 print("Generated plots at:")

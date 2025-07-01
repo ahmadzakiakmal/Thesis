@@ -140,7 +140,11 @@ func ConvertHttpRequestToConsensusRequest(r *http.Request, requestID string) (*R
 }
 
 // NewServiceRegistry creates a new service registry
-func NewServiceRegistry(repository *repository.Repository, logger cmtlog.Logger, isByzantine bool) *ServiceRegistry {
+func NewServiceRegistry(
+	repository *repository.Repository,
+	logger cmtlog.Logger,
+	isByzantine bool,
+) *ServiceRegistry {
 	return &ServiceRegistry{
 		handlers:    make(map[RouteKey]ServiceHandler),
 		exactRoutes: make(map[RouteKey]bool),
@@ -217,25 +221,59 @@ func matchPath(pattern, path string) bool {
 	return true
 }
 
-// RegisterDefaultServices sets up the default services for the BFT system
+// RegisterDefaultServices sets up
+// the default services for the BFT system
 func (sr *ServiceRegistry) RegisterDefaultServices() {
 	// Endpoints
-
-	// Create Session Endpoint
-	sr.RegisterHandler("POST", "/session/start", true, sr.CreateSessionHandler)
-	// Scan Package Ednpoint
-	sr.RegisterHandler("GET", "/session/:id/scan/:packageID", false, sr.ScanPackageHandler)
-	// Validate Package Endpoint
-	sr.RegisterHandler("POST", "/session/:id/validate", false, sr.ValidatePackageHandler)
-	// Quality Check Endpoint
-	sr.RegisterHandler("POST", "/session/:id/qc", false, sr.QualityCheckHandler)
-	// Label Package Endpoint
-	sr.RegisterHandler("POST", "/session/:id/label", false, sr.LabelPackageHandler)
-	// Commit Session Endpoint
-	sr.RegisterHandler("POST", "/commit/:id", false, sr.CommitSessionHandler)
-
 	// Test Create Package Endpoint
-	sr.RegisterHandler("POST", "/session/test-package", true, sr.CreateTestPackage)
+	sr.RegisterHandler(
+		"POST",
+		"/session/test-package",
+		true,
+		sr.CreateTestPackage,
+	)
+	// Create Session Endpoint
+	sr.RegisterHandler(
+		"POST",
+		"/session/start",
+		true,
+		sr.CreateSessionHandler,
+	)
+	// Scan Package Ednpoint
+	sr.RegisterHandler(
+		"GET",
+		"/session/:id/scan/:packageID",
+		false,
+		sr.ScanPackageHandler,
+	)
+	// Validate Package Endpoint
+	sr.RegisterHandler(
+		"POST",
+		"/session/:id/validate",
+		false,
+		sr.ValidatePackageHandler,
+	)
+	// Quality Check Endpoint
+	sr.RegisterHandler(
+		"POST",
+		"/session/:id/qc",
+		false,
+		sr.QualityCheckHandler,
+	)
+	// Label Package Endpoint
+	sr.RegisterHandler(
+		"POST",
+		"/session/:id/label",
+		false,
+		sr.LabelPackageHandler,
+	)
+	// Commit Session Endpoint
+	sr.RegisterHandler(
+		"POST",
+		"/commit/:id",
+		false,
+		sr.CommitSessionHandler,
+	)
 }
 
 // GenerateResponse executes the request and generates a response

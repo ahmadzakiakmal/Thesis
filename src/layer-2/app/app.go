@@ -213,19 +213,27 @@ func (app *Application) verifyTransaction(txID []byte) (*abcitypes.QueryResponse
 }
 
 // CheckTx implements the ABCI CheckTx method
-func (app *Application) CheckTx(_ context.Context, check *abcitypes.CheckTxRequest) (*abcitypes.CheckTxResponse, error) {
+func (app *Application) CheckTx(
+	_ context.Context,
+	check *abcitypes.CheckTxRequest,
+) (*abcitypes.CheckTxResponse, error) {
 	txBytes := check.Tx
-	fmt.Println("[CHECKTX]:")
 
 	var tx srvreg.Transaction
 	err := json.Unmarshal(txBytes, &tx)
 	if err != nil {
-		return &abcitypes.CheckTxResponse{Code: 1}, fmt.Errorf("fail to parse tx on CheckTx: %s", err.Error())
+		return &abcitypes.CheckTxResponse{
+				Code: 1,
+			},
+			fmt.Errorf(
+				"fail to parse tx on CheckTx: %s",
+				err.Error(),
+			)
 	}
-	fmt.Println("[CHECKTX_REQ]:")
-	fmt.Println(tx.Request)
 
-	return &abcitypes.CheckTxResponse{Code: 0}, nil
+	return &abcitypes.CheckTxResponse{
+		Code: 0,
+	}, nil
 }
 
 // InitChain implements the ABCI InitChain method
@@ -241,44 +249,60 @@ func (app *Application) PrepareProposal(_ context.Context, proposal *abcitypes.P
 }
 
 // ProcessProposal implements the ABCI ProcessProposal method
-func (app *Application) ProcessProposal(_ context.Context, proposal *abcitypes.ProcessProposalRequest) (*abcitypes.ProcessProposalResponse, error) {
+func (app *Application) ProcessProposal(
+	_ context.Context,
+	proposal *abcitypes.ProcessProposalRequest,
+) (*abcitypes.ProcessProposalResponse, error) {
 	fmt.Println("[PROCESSPROPOSAL]:")
-	for i, txBytes := range proposal.Txs {
-		fmt.Printf("%d, TX:\n", i)
+	for _, txBytes := range proposal.Txs {
 		var tx *srvreg.Transaction
 		json.Unmarshal(txBytes, &tx)
-		fmt.Println(tx.Request)
-		fmt.Println(tx.Response)
 
 		isTxOriginator := app.nodeID == tx.OriginNodeID
 		if !isTxOriginator {
 			// Replicate the request and compare the response
-			handler, isHandlerFound := app.serviceRegistry.GetHandlerForPath(tx.Request.Method, tx.Request.Path)
+			handler, isHandlerFound := app.serviceRegistry.
+				GetHandlerForPath(
+					tx.Request.Method,
+					tx.Request.Path,
+				)
 			if isHandlerFound {
 				response, err := handler(&tx.Request)
 				if err != nil {
 					fmt.Println("Voted invalid", err)
-					return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT}, err
+					return &abcitypes.ProcessProposalResponse{
+						Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT,
+					}, err
 				}
 				if !compareResponses(response, &tx.Response) {
 					fmt.Println("Voted invalid")
 					fmt.Println("Different responses, byzantine behavior detected")
-					return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT},
+					return &abcitypes.ProcessProposalResponse{
+							Status: abcitypes.
+								PROCESS_PROPOSAL_STATUS_REJECT,
+						},
 						fmt.Errorf("response is different, byzantine behavior detected")
 				}
 			} else {
 				fmt.Println("Voted invalid", "Handler not found")
-				return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT},
+				return &abcitypes.ProcessProposalResponse{
+						Status: abcitypes.PROCESS_PROPOSAL_STATUS_REJECT,
+					},
 					fmt.Errorf("handler not found, byzantine behavior detected")
 			}
 		}
 	}
 	fmt.Println("Voted valid")
-	return &abcitypes.ProcessProposalResponse{Status: abcitypes.PROCESS_PROPOSAL_STATUS_ACCEPT}, nil
+	return &abcitypes.ProcessProposalResponse{Status: abcitypes.
+		PROCESS_PROPOSAL_STATUS_ACCEPT,
+	}, nil
 }
 
 // FinalizeBlock implements the ABCI FinalizeBlock method
-func (app *Application) FinalizeBlock(_ context.Context, req *abcitypes.FinalizeBlockRequest) (*abcitypes.FinalizeBlockResponse, error) {
+func (app *Application) FinalizeBlock(
+	_ context.Context,
+	req *abcitypes.FinalizeBlockRequest,
+) (*abcitypes.FinalizeBlockResponse, error) {
 	var txResults = make([]*abcitypes.ExecTxResult, len(req.Txs))
 
 	app.mu.Lock()
@@ -290,31 +314,56 @@ func (app *Application) FinalizeBlock(_ context.Context, req *abcitypes.Finalize
 		var tx srvreg.Transaction
 
 		if err := json.Unmarshal(txBytes, &tx); err != nil {
-			txResults[i] = &abcitypes.ExecTxResult{Code: 1, Log: "Invalid transaction format"}
+			txResults[i] = &abcitypes.ExecTxResult{
+				Code: 1,
+				Log:  "Invalid transaction format",
+			}
 			continue
 		}
 
-		txID := generateTxID(tx.Request.RequestID, tx.OriginNodeID)
-		// Accept all tx that made it through to this method
+		txID := generateTxID(
+			tx.Request.RequestID,
+			tx.OriginNodeID,
+		)
+		// accept all tx that made it through to this method
 		status := "accepted"
-		txResults[i] = app.storeTransaction(txID, &tx, status, txBytes)
+		txResults[i] = app.storeTransaction(
+			txID,
+			&tx,
+			status,
+			txBytes,
+		)
 	}
 
-	// Store the last block info
+	// store the last block info
 	blockHeight := req.Height
 
-	// Calculate application hash
+	// calculate application hash
 	appHash := calculateAppHash(txResults)
 
-	// Store block info
-	err := app.onGoingBlock.Set([]byte("last_block_height"), int64ToBytes(blockHeight))
+	// store block info
+	err := app.onGoingBlock.
+		Set(
+			[]byte("last_block_height"),
+			int64ToBytes(blockHeight),
+		)
 	if err != nil {
-		log.Printf("Error storing block height: %v", err)
+		log.Printf(
+			"Error storing block height: %v",
+			err,
+		)
 	}
 
-	err = app.onGoingBlock.Set([]byte("last_block_app_hash"), appHash)
+	err = app.onGoingBlock.
+		Set(
+			[]byte("last_block_app_hash"),
+			appHash,
+		)
 	if err != nil {
-		log.Printf("Error storing app hash: %v", err)
+		log.Printf(
+			"Error storing app hash: %v",
+			err,
+		)
 	}
 
 	return &abcitypes.FinalizeBlockResponse{
